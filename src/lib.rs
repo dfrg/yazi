@@ -19,7 +19,7 @@
 //! Cargo.toml:
 //! ```toml
 //! [dependencies]
-//! yazi = "0.1.0"
+//! yazi = "0.1.1"
 //! ```
 //!
 //! The [`compress`](fn.compress.html) and [`decompress`](fn.decompress.html) functions
