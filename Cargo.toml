@@ -9,5 +9,6 @@ keywords = ["deflate", "zlib", "compression", "decompression"]
 categories = ["compression"]
 repository = "https://github.com/dfrg/yazi"
 homepage = "https://github.com/dfrg/yazi"
+readme = "README.me"
 
 [dependencies]
