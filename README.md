@@ -20,7 +20,7 @@ Add this to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-yazi = "0.1.1"
+yazi = "0.1.2"
 ```
 
 The following demonstrates simple usage for compressing and decompressing in-memory buffers:

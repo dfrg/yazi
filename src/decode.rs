@@ -853,7 +853,8 @@ fn copy_match(buf: &mut [u8], pos: usize, len: usize, buf_end: usize) {
     unsafe {
         let src = buf.as_ptr().add(pos);
         let dest = buf.as_mut_ptr().add(buf_end);
-        if USE_UNALIGNED_READS_LE && limit - buf_end >= 3 * WORDBYTES - 3 {
+        let next_end = buf_end + len;
+        if USE_UNALIGNED_READS_LE && limit - next_end >= WORDBYTES - 1 {
             if dist >= WORDBYTES {
                 let src = src as *const u64;
                 let dest = dest as *mut u64;
