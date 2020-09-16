@@ -4,7 +4,7 @@ use super::{Error, Format};
 use std::io::{self, Write};
 
 /// Stateful context for decompression.
-/// 
+///
 /// See the crate level [decompression](index.html#decompression) section
 /// for detailed usage.
 pub struct Decoder(InflateContext);
@@ -78,7 +78,7 @@ impl Decoder {
 }
 
 /// Decompression stream combining a decoder context with an output.
-/// 
+///
 /// See the crate level [decompression](index.html#decompression) section
 /// for detailed usage.
 pub struct DecoderStream<'a, S: Sink> {
@@ -97,7 +97,7 @@ impl<'a, S: Sink> DecoderStream<'a, S> {
         self.ctx.inflate(buf, &mut self.sink, false)
     }
 
-    /// Returns the number of decompressed bytes that have been written to the 
+    /// Returns the number of decompressed bytes that have been written to the
     /// output.
     pub fn decompressed_size(&self) -> u64 {
         self.sink.written()
@@ -145,7 +145,7 @@ impl<'a, S: Sink> Write for DecoderStream<'a, S> {
 }
 
 /// Decompresses a buffer of the specified format into a vector.
-/// 
+///
 /// On success, returns a vector containing the decompressed data and
 /// optionally an Adler-32 checksum if the source data was zlib
 /// encoded.
@@ -169,6 +169,7 @@ struct InflateContext {
     bits_in: u32,
     trees: Trees,
     checksum: Option<u32>,
+    last_block: bool,
     done: bool,
 }
 
@@ -184,6 +185,7 @@ impl InflateContext {
             pos: 0,
             trees: Trees::new(),
             checksum: None,
+            last_block: false,
             done: false,
         }
     }
@@ -197,6 +199,7 @@ impl InflateContext {
         self.bit_buffer = 0;
         self.bits_in = 0;
         self.checksum = None;
+        self.last_block = false;
         self.done = false;
     }
 
@@ -206,7 +209,7 @@ impl InflateContext {
         sink: &mut S,
         is_last: bool,
     ) -> Result<(), Error> {
-        while is_last || buf.len() != 0 {
+        while !self.done && (is_last || buf.len() != 0) {
             let mut bits = Bits::new(self.bit_buffer, self.bits_in);
             let (res, used_remainder) = if self.remainder.avail != 0 {
                 let used = self.remainder.push(buf);
@@ -215,6 +218,7 @@ impl InflateContext {
                 let res = inflate(
                     self.zlib,
                     &mut self.state,
+                    &mut self.last_block,
                     &mut self.done,
                     &mut source,
                     &mut bits,
@@ -232,6 +236,7 @@ impl InflateContext {
                 let res = inflate(
                     self.zlib,
                     &mut self.state,
+                    &mut self.last_block,
                     &mut self.done,
                     &mut source,
                     &mut bits,
@@ -285,6 +290,7 @@ enum State {
 fn inflate<S: Sink>(
     zlib: bool,
     state: &mut State,
+    last_block: &mut bool,
     done: &mut bool,
     source: &mut Source,
     bits: &mut Bits,
@@ -304,7 +310,7 @@ fn inflate<S: Sink>(
                 continue;
             }
             State::Block => {
-                if *done {
+                if *last_block {
                     if zlib && checksum.is_none() {
                         bits.skip(bits.bits_in & 7);
                         if bits.bytes_available(source) < 4 {
@@ -312,22 +318,27 @@ fn inflate<S: Sink>(
                         }
                         *checksum = Some(read_zlib_checksum(source, bits)?);
                     }
+                    *done = true;
                     return Ok(());
                 }
                 if bits.bytes_available(source) < 286 && !is_last {
                     return Err(Error::Underflow);
                 }
-                let header = bits.maybe_pop(source, 3)?;
-                *done = header & 1 != 0;
+                let header = bits.try_pop_source(source, 3)?;
+                *last_block = header & 1 != 0;
                 match header >> 1 {
                     0 => {
-                        bits.skip(bits.bits_in & 7);
+                        bits.try_skip(bits.bits_in & 7)?;
                         let mut parts = [0u32; 4];
                         for i in 0..4 {
                             if bits.bits_in >= 8 {
                                 parts[i] = bits.pop(8) as u32;
                             } else {
-                                parts[i] = source.buffer[source.pos] as u32;
+                                parts[i] = *source
+                                    .buffer
+                                    .get(source.pos)
+                                    .ok_or(Error::InvalidBitstream)?
+                                    as u32;
                                 source.pos += 1;
                                 source.avail -= 1;
                             }
@@ -347,7 +358,7 @@ fn inflate<S: Sink>(
                         }
                         *state = State::Copy(remaining);
                         while remaining > 0 {
-                            let bytes = source.maybe_get(remaining)?;
+                            let bytes = source.try_get(remaining)?;
                             sink.write(bytes)?;
                             remaining -= bytes.len();
                             *state = State::Copy(remaining);
@@ -369,7 +380,7 @@ fn inflate<S: Sink>(
                         continue;
                     }
                     2 => {
-                        decode_trees(source, bits, &mut trees.lt, &mut trees.dt)?;
+                        decode_trees(source, bits, &mut trees.lt, &mut trees.dt, is_last)?;
                         *state = State::Inflate;
                         continue;
                     }
@@ -380,7 +391,7 @@ fn inflate<S: Sink>(
             }
             State::Copy(mut remaining) => {
                 while remaining > 0 {
-                    let bytes = source.maybe_get(remaining)?;
+                    let bytes = source.try_get(remaining)?;
                     sink.write(bytes)?;
                     remaining -= bytes.len();
                     *state = State::Copy(remaining);
@@ -390,27 +401,122 @@ fn inflate<S: Sink>(
             }
             State::Inflate => {
                 let mut lbits = *bits;
-                loop {
-                    if lbits.bits_in < 15 && lbits.fill(source) < 15 && !is_last {
+                let mut entry = 0;
+                if !is_last {
+                    loop {
+                        let mut handle_match = false;
+                        while lbits.bits_in >= 15 {
+                            entry = trees.lt.table[lbits.peek(LITERAL_LENGTH_TABLE_BITS) as usize];
+                            if entry & ENTRY_SUBTABLE != 0 {
+                                lbits.skip(LITERAL_LENGTH_TABLE_BITS);
+                                entry = trees.lt.table[(((entry >> ENTRY_SHIFT) & 0xFFFF)
+                                    + lbits.peek(entry & ENTRY_LENGTH_MASK))
+                                    as usize];
+                            }
+                            lbits.skip(entry & ENTRY_LENGTH_MASK);
+                            if entry & ENTRY_LITERAL == 0 {
+                                handle_match = true;
+                                break;
+                            }
+                            sink.push((entry >> ENTRY_SHIFT) as u8)?;
+                        }
+                        if !handle_match {
+                            if lbits.fill(source) >= 15 {
+                                entry =
+                                    trees.lt.table[lbits.peek(LITERAL_LENGTH_TABLE_BITS) as usize];
+                                if entry & ENTRY_SUBTABLE != 0 {
+                                    lbits.skip(LITERAL_LENGTH_TABLE_BITS);
+                                    entry = trees.lt.table[(((entry >> ENTRY_SHIFT) & 0xFFFF)
+                                        + lbits.peek(entry & ENTRY_LENGTH_MASK))
+                                        as usize];
+                                }
+                                lbits.skip(entry & ENTRY_LENGTH_MASK);
+                                if entry & ENTRY_LITERAL != 0 {
+                                    sink.push((entry >> ENTRY_SHIFT) as u8)?;
+                                    continue;
+                                }
+                            } else {
+                                *bits = lbits;
+                                return Err(Error::Underflow);
+                            }
+                        }
+                        entry >>= ENTRY_SHIFT;
+                        if lbits.fill(source) >= 33 {
+                            let length = ((entry >> LENGTH_BASE_SHIFT)
+                                + lbits.pop(entry & EXTRA_LENGTH_BITS_MASK))
+                                as usize;
+                            if length == 0 {
+                                *bits = lbits;
+                                *state = State::Block;
+                                break;
+                            }
+                            entry = trees.dt.table[lbits.peek(DISTANCE_TABLE_BITS) as usize];
+                            if entry & ENTRY_SUBTABLE != 0 {
+                                lbits.skip(DISTANCE_TABLE_BITS);
+                                entry = trees.dt.table[(((entry >> ENTRY_SHIFT) & 0xFFFF)
+                                    + lbits.peek(entry & ENTRY_LENGTH_MASK))
+                                    as usize];
+                            }
+                            lbits.skip(entry & ENTRY_LENGTH_MASK);
+                            entry >>= ENTRY_SHIFT;
+                            let distance = ((entry & DISTANCE_BASE_MASK)
+                                + lbits.pop(entry >> EXTRA_DISTANCE_BITS_SHIFT))
+                                as usize;
+                            sink.apply_match(distance, length)?;
+                        } else {
+                            *bits = lbits;
+                            *state = State::Match(entry);
+                            return Err(Error::Underflow);
+                        }
+                    }
+                } else {
+                    loop {
+                        if lbits.bits_in < 15 {
+                            lbits.fill(source);
+                        }
+                        let mut entry = trees.lt.table[lbits.peek(LITERAL_LENGTH_TABLE_BITS) as usize];
+                        if entry & ENTRY_SUBTABLE != 0 {
+                            lbits.try_skip(LITERAL_LENGTH_TABLE_BITS)?;
+                            entry = trees.lt.table[(((entry >> ENTRY_SHIFT) & 0xFFFF)
+                                + lbits.peek(entry & ENTRY_LENGTH_MASK))
+                                as usize];
+                        }
+                        lbits.try_skip(entry & ENTRY_LENGTH_MASK)?;
+                        if entry & ENTRY_LITERAL != 0 {
+                            sink.push((entry >> ENTRY_SHIFT) as u8)?;
+                            continue;
+                        }
+                        entry >>= ENTRY_SHIFT;
+                        lbits.fill(source);
+                        let length = ((entry >> LENGTH_BASE_SHIFT)
+                            + lbits.try_pop(entry & EXTRA_LENGTH_BITS_MASK)?)
+                            as usize;
+                        if length == 0 {
+                            *bits = lbits;
+                            *state = State::Block;
+                            break;
+                        }
+                        entry = trees.dt.table[lbits.peek(DISTANCE_TABLE_BITS) as usize];
+                        if entry & ENTRY_SUBTABLE != 0 {
+                            lbits.try_skip(DISTANCE_TABLE_BITS)?;
+                            entry = trees.dt.table[(((entry >> ENTRY_SHIFT) & 0xFFFF)
+                                + lbits.peek(entry & ENTRY_LENGTH_MASK))
+                                as usize];
+                        }
+                        lbits.try_skip(entry & ENTRY_LENGTH_MASK)?;
+                        entry >>= ENTRY_SHIFT;
+                        let distance = ((entry & DISTANCE_BASE_MASK)
+                            + lbits.try_pop(entry >> EXTRA_DISTANCE_BITS_SHIFT)?)
+                            as usize;
+                        sink.apply_match(distance, length)?;
+                    }
+                }
+            }
+            State::Match(mut entry) => {
+                let mut lbits = *bits;
+                if !is_last {
+                    if lbits.fill(source) < 33 {
                         *bits = lbits;
-                        return Err(Error::Underflow);
-                    }
-                    let mut entry = trees.lt.table[lbits.get(LITERAL_LENGTH_TABLE_BITS) as usize];
-                    if entry & ENTRY_SUBTABLE != 0 {
-                        lbits.skip(LITERAL_LENGTH_TABLE_BITS);
-                        entry = trees.lt.table[(((entry >> ENTRY_SHIFT) & 0xFFFF)
-                            + lbits.get(entry & ENTRY_LENGTH_MASK))
-                            as usize];
-                    }
-                    lbits.skip(entry & ENTRY_LENGTH_MASK);
-                    if entry & ENTRY_LITERAL != 0 {
-                        sink.push((entry >> ENTRY_SHIFT) as u8)?;
-                        continue;
-                    }
-                    entry >>= ENTRY_SHIFT;
-                    if lbits.fill(source) < 33 && !is_last {
-                        *bits = lbits;
-                        *state = State::Match(entry);
                         return Err(Error::Underflow);
                     }
                     let length = ((entry >> LENGTH_BASE_SHIFT)
@@ -419,13 +525,13 @@ fn inflate<S: Sink>(
                     if length == 0 {
                         *bits = lbits;
                         *state = State::Block;
-                        break;
+                        continue;
                     }
-                    entry = trees.dt.table[lbits.get(DISTANCE_TABLE_BITS) as usize];
+                    entry = trees.dt.table[lbits.peek(DISTANCE_TABLE_BITS) as usize];
                     if entry & ENTRY_SUBTABLE != 0 {
                         lbits.skip(DISTANCE_TABLE_BITS);
                         entry = trees.dt.table[(((entry >> ENTRY_SHIFT) & 0xFFFF)
-                            + lbits.get(entry & ENTRY_LENGTH_MASK))
+                            + lbits.peek(entry & ENTRY_LENGTH_MASK))
                             as usize];
                     }
                     lbits.skip(entry & ENTRY_LENGTH_MASK);
@@ -433,39 +539,34 @@ fn inflate<S: Sink>(
                     let distance = ((entry & DISTANCE_BASE_MASK)
                         + lbits.pop(entry >> EXTRA_DISTANCE_BITS_SHIFT))
                         as usize;
+                    *bits = lbits;
+                    *state = State::Inflate;
+                    sink.apply_match(distance, length)?;
+                } else {
+                    let length = ((entry >> LENGTH_BASE_SHIFT)
+                        + lbits.try_pop(entry & EXTRA_LENGTH_BITS_MASK)?)
+                        as usize;
+                    if length == 0 {
+                        *bits = lbits;
+                        *state = State::Block;
+                        continue;
+                    }
+                    entry = trees.dt.table[lbits.peek(DISTANCE_TABLE_BITS) as usize];
+                    if entry & ENTRY_SUBTABLE != 0 {
+                        lbits.try_skip(DISTANCE_TABLE_BITS)?;
+                        entry = trees.dt.table[(((entry >> ENTRY_SHIFT) & 0xFFFF)
+                            + lbits.peek(entry & ENTRY_LENGTH_MASK))
+                            as usize];
+                    }
+                    lbits.try_skip(entry & ENTRY_LENGTH_MASK)?;
+                    entry >>= ENTRY_SHIFT;
+                    let distance = ((entry & DISTANCE_BASE_MASK)
+                        + lbits.try_pop(entry >> EXTRA_DISTANCE_BITS_SHIFT)?)
+                        as usize;
+                    *bits = lbits;
+                    *state = State::Inflate;
                     sink.apply_match(distance, length)?;
                 }
-            }
-            State::Match(mut entry) => {
-                let mut lbits = *bits;
-                if lbits.fill(source) < 33 && !is_last {
-                    *bits = lbits;
-                    return Err(Error::Underflow);
-                }
-                let length = ((entry >> LENGTH_BASE_SHIFT)
-                    + lbits.pop(entry & EXTRA_LENGTH_BITS_MASK))
-                    as usize;
-                if length == 0 {
-                    *bits = lbits;
-                    *state = State::Block;
-                    continue;
-                }
-                entry = trees.dt.table[lbits.get(DISTANCE_TABLE_BITS) as usize];
-                if entry & ENTRY_SUBTABLE != 0 {
-                    lbits.skip(DISTANCE_TABLE_BITS);
-                    entry = trees.dt.table[(((entry >> ENTRY_SHIFT) & 0xFFFF)
-                        + lbits.get(entry & ENTRY_LENGTH_MASK))
-                        as usize];
-                }
-                lbits.skip(entry & ENTRY_LENGTH_MASK);
-                entry >>= ENTRY_SHIFT;
-                let distance = ((entry & DISTANCE_BASE_MASK)
-                    + lbits.pop(entry >> EXTRA_DISTANCE_BITS_SHIFT))
-                    as usize;
-                *bits = lbits;
-                *state = State::Inflate;
-                sink.apply_match(distance, length)?;
-                continue;
             }
         }
     }
@@ -476,50 +577,100 @@ fn decode_trees(
     bits: &mut Bits,
     lt: &mut LiteralLengthTree,
     dt: &mut DistanceTree,
+    is_last: bool,
 ) -> Result<(), Error> {
     let mut lengths: [u8; MAX_LENGTHS] = unsafe { std::mem::MaybeUninit::uninit().assume_init() };
     bits.fill(source);
-    let ltlen = bits.pop(5) as usize + 257;
-    let dtlen = bits.pop(5) as usize + 1;
-    let ptlen = bits.pop(4) as usize + 4;
-    if ltlen > 286 || dtlen > 30 {
-        return Err(Error::InvalidBitstream);
-    }
-    for i in 0..19 {
-        lengths[i] = 0;
-    }
-    bits.fill(source);
-    for code in &PRECODE_SWIZZLE[..ptlen] {
-        let clen = bits.maybe_pop(source, 3)?;
-        lengths[*code as usize] = clen as u8;
-    }
-    if !lt.build_precode(&lengths[..19]) {
-        return Err(Error::InvalidBitstream);
-    }
-    let mut i = 0;
-    while i < (ltlen + dtlen) {
-        if bits.bits_in < 7 {
-            bits.fill(source);
-        }
-        let entry = lt.table[bits.get(7) as usize];
-        bits.skip(entry & ENTRY_LENGTH_MASK);
-        let presym = entry >> ENTRY_SHIFT;
-        if presym < 16 {
-            lengths[i] = presym as u8;
-            i += 1;
-            continue;
-        }
-        if bits.bits_in < 7 {
-            bits.fill(source);
-        }
-        if presym > 18 || (presym == 16 && i == 0) {
+    let ltlen;
+    let dtlen;
+    if !is_last {
+        ltlen = bits.pop(5) as usize + 257;
+        dtlen = bits.pop(5) as usize + 1;
+        let ptlen = bits.pop(4) as usize + 4;
+        if ltlen > 286 || dtlen > 30 {
             return Err(Error::InvalidBitstream);
         }
-        let (extra_bits, extra) = [(2, 3), (3, 3), (7, 11), (0, 0)][(presym as usize - 16) & 0x3];
-        let count = bits.pop(extra_bits) as usize + extra;
-        let l = if presym == 16 { lengths[i - 1] } else { 0 };
-        (&mut lengths[i..i + count]).iter_mut().for_each(|p| *p = l);
-        i += count;
+        for i in 0..19 {
+            lengths[i] = 0;
+        }
+        bits.fill(source);
+        for code in &PRECODE_SWIZZLE[..ptlen] {
+            let clen = bits.try_pop_source(source, 3)?;
+            lengths[*code as usize] = clen as u8;
+        }
+        if !lt.build_precode(&lengths[..19]) {
+            return Err(Error::InvalidBitstream);
+        }
+        let mut i = 0;
+        while i < (ltlen + dtlen) {
+            if bits.bits_in < 7 {
+                bits.fill(source);
+            }
+            let entry = lt.table[bits.peek(7) as usize];
+            bits.skip(entry & ENTRY_LENGTH_MASK);
+            let presym = entry >> ENTRY_SHIFT;
+            if presym < 16 {
+                lengths[i] = presym as u8;
+                i += 1;
+                continue;
+            }
+            if bits.bits_in < 7 {
+                bits.fill(source);
+            }
+            if presym > 18 || (presym == 16 && i == 0) {
+                return Err(Error::InvalidBitstream);
+            }
+            let (extra_bits, extra) = [(2, 3), (3, 3), (7, 11), (0, 0)][(presym as usize - 16) & 0x3];
+            let count = bits.pop(extra_bits) as usize + extra;
+            let l = if presym == 16 { lengths[i - 1] } else { 0 };
+            let p = lengths.get_mut(i..i + count).ok_or(Error::InvalidBitstream)?;
+            p.iter_mut().for_each(|p| *p = l);
+            i += count;
+        }
+    } else {
+        ltlen = bits.try_pop(5)? as usize + 257;
+        dtlen = bits.try_pop(5)? as usize + 1;
+        let ptlen = bits.try_pop(4)? as usize + 4;
+        if ltlen > 286 || dtlen > 30 {
+            return Err(Error::InvalidBitstream);
+        }
+        for i in 0..19 {
+            lengths[i] = 0;
+        }
+        bits.fill(source);
+        for code in &PRECODE_SWIZZLE[..ptlen] {
+            let clen = bits.try_pop_source(source, 3)?;
+            lengths[*code as usize] = clen as u8;
+        }
+        if !lt.build_precode(&lengths[..19]) {
+            return Err(Error::InvalidBitstream);
+        }
+        let mut i = 0;
+        while i < (ltlen + dtlen) {
+            if bits.bits_in < 7 {
+                bits.fill(source);
+            }
+            let entry = lt.table[bits.peek(7) as usize];
+            bits.try_skip(entry & ENTRY_LENGTH_MASK)?;
+            let presym = entry >> ENTRY_SHIFT;
+            if presym < 16 {
+                lengths[i] = presym as u8;
+                i += 1;
+                continue;
+            }
+            if bits.bits_in < 7 {
+                bits.fill(source);
+            }
+            if presym > 18 || (presym == 16 && i == 0) {
+                return Err(Error::InvalidBitstream);
+            }
+            let (extra_bits, extra) = [(2, 3), (3, 3), (7, 11), (0, 0)][(presym as usize - 16) & 0x3];
+            let count = bits.try_pop(extra_bits)? as usize + extra;
+            let l = if presym == 16 { lengths[i - 1] } else { 0 };
+            let p = lengths.get_mut(i..i + count).ok_or(Error::InvalidBitstream)?;
+            p.iter_mut().for_each(|p| *p = l);
+            i += count;
+        }
     }
     if lengths[256] == 0
         || !lt.build(&lengths[..ltlen])
@@ -661,8 +812,8 @@ fn build_tree(
 }
 
 fn verify_zlib_header(source: &mut Source, bits: &mut Bits) -> Result<(), Error> {
-    let cmf = bits.maybe_pop(source, 8)?;
-    let flg = bits.maybe_pop(source, 8)?;
+    let cmf = bits.try_pop_source(source, 8)?;
+    let flg = bits.try_pop_source(source, 8)?;
     if (256 * cmf + flg) % 31 != 0 || cmf & 0x0F != 8 || (cmf >> 4) > 7 || flg & 0x20 != 0 {
         return Err(Error::InvalidBitstream);
     }
@@ -672,7 +823,7 @@ fn verify_zlib_header(source: &mut Source, bits: &mut Bits) -> Result<(), Error>
 fn read_zlib_checksum(source: &mut Source, bits: &mut Bits) -> Result<u32, Error> {
     let mut parts = [0u32; 4];
     for i in 0..4 {
-        parts[i] = bits.maybe_pop(source, 8)?;
+        parts[i] = bits.try_pop_source(source, 8)?;
     }
     Ok(parts[0] << 24 | parts[1] << 16 | parts[2] << 8 | parts[3])
 }
@@ -743,7 +894,7 @@ impl<'a> Source<'a> {
         }
     }
 
-    fn maybe_get(&mut self, len: usize) -> Result<&[u8], Error> {
+    fn try_get(&mut self, len: usize) -> Result<&[u8], Error> {
         let bytes = self.get(len);
         if bytes.len() == 0 {
             return Err(Error::Underflow);
@@ -813,7 +964,7 @@ impl<'a> Bits {
     }
 
     #[inline(always)]
-    fn maybe_pop(&mut self, source: &mut Source, len: u32) -> Result<u32, Error> {
+    fn try_pop_source(&mut self, source: &mut Source, len: u32) -> Result<u32, Error> {
         if self.bits_in < len {
             if self.fill(source) < len {
                 return Err(Error::Underflow);
@@ -826,7 +977,28 @@ impl<'a> Bits {
     }
 
     #[inline(always)]
-    fn get(&mut self, len: u32) -> u32 {
+    fn try_pop(&mut self, len: u32) -> Result<u32, Error> {
+        if self.bits_in < len {
+            return Err(Error::Underflow);
+        }
+        let bits = self.bit_buffer & ((1 << len) - 1);
+        self.bit_buffer >>= len;
+        self.bits_in -= len;
+        Ok(bits as u32)
+    }
+
+    #[inline(always)]
+    fn try_skip(&mut self, len: u32) -> Result<(), Error> {
+        if self.bits_in < len {
+            return Err(Error::Underflow);
+        }
+        self.bit_buffer >>= len;
+        self.bits_in -= len;
+        Ok(())
+    }
+
+    #[inline(always)]
+    fn peek(&mut self, len: u32) -> u32 {
         (self.bit_buffer & ((1 << len) - 1)) as u32
     }
 
@@ -877,7 +1049,7 @@ fn copy_match(buf: &mut [u8], pos: usize, len: usize, buf_end: usize) {
                     *dest.add(j) = v;
                     i += WORDBYTES;
                     j += 1;
-                }                
+                }
             } else {
                 for i in 0..len {
                     *dest.add(i) = *src.add(i);
