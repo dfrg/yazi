@@ -23,7 +23,7 @@
 //! ```
 //!
 //! The [`compress`](fn.compress.html) and [`decompress`](fn.decompress.html) functions
-//! are provided for the most common use cases: 
+//! are provided for the most common use cases:
 //! ```
 //! use yazi::*;
 //! // Your source data.
@@ -37,7 +37,7 @@
 //! // Verify that the decompressed data matches the original.
 //! assert_eq!(&decompressed[..], data);
 //! ```
-//! 
+//!
 //! Read on for more detailed usage.
 //!
 //! # Compression

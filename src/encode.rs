@@ -50,8 +50,8 @@ pub enum CompressionStrategy {
 }
 
 /// Stateful context for compression.
-/// 
-/// See the crate level [compression](index.html#compression) section 
+///
+/// See the crate level [compression](index.html#compression) section
 /// for detailed usage.
 pub struct Encoder(DeflateContext);
 
@@ -117,7 +117,7 @@ impl Encoder {
         }))
     }
 
-    /// Sets the format of the output bitstream for the next usage of the 
+    /// Sets the format of the output bitstream for the next usage of the
     /// encoder.
     pub fn set_format(&mut self, format: Format) {
         self.0.reset(format == Format::Zlib);
@@ -186,8 +186,8 @@ impl Encoder {
 }
 
 /// Compression stream combining an encoder context with an output.
-/// 
-/// See the crate level [compression](index.html#compression) section 
+///
+/// See the crate level [compression](index.html#compression) section
 /// for detailed usage.
 pub struct EncoderStream<'a, S: Sink> {
     ctx: &'a mut DeflateContext,
@@ -205,7 +205,7 @@ impl<'a, S: Sink> EncoderStream<'a, S> {
         self.ctx.deflate(buf, &mut self.sink, false)
     }
 
-    /// Returns the number of compressed bytes that have been written to the 
+    /// Returns the number of compressed bytes that have been written to the
     /// output.
     pub fn compressed_size(&self) -> u64 {
         self.sink.written()
@@ -254,10 +254,10 @@ impl<'a, S: Sink> Write for EncoderStream<'a, S> {
     }
 }
 
-/// Compresses a buffer into a vector with the specified format and 
+/// Compresses a buffer into a vector with the specified format and
 /// compression level.
 pub fn compress(buf: &[u8], format: Format, level: CompressionLevel) -> Result<Vec<u8>, Error> {
-    let mut encoder = Encoder::boxed();    
+    let mut encoder = Encoder::boxed();
     encoder.set_format(format);
     encoder.set_level(level);
     let mut vec = Vec::new();
@@ -1604,12 +1604,12 @@ fn make_zlib_header(flags: u32) -> [u8; 2] {
         3
     } else {
         2
-    };        
+    };
     let cmf = 8 | (7 << 4);
     let flg = (level as u8) << 6;
     let rem = ((cmf as u32 * 256) + flg as u32) % FCHECK_DIVISOR;
-    let check = (flg & 0b11100000) + (FCHECK_DIVISOR - rem) as u8;        
-    [cmf, check]        
+    let check = (flg & 0b11100000) + (FCHECK_DIVISOR - rem) as u8;
+    [cmf, check]
 }
 
 const LITERAL_LENGTH_TREE_SIZE: usize = 288;
