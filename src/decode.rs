@@ -474,7 +474,8 @@ fn inflate<S: Sink>(
                         if lbits.bits_in < 15 {
                             lbits.fill(source);
                         }
-                        let mut entry = trees.lt.table[lbits.peek(LITERAL_LENGTH_TABLE_BITS) as usize];
+                        let mut entry =
+                            trees.lt.table[lbits.peek(LITERAL_LENGTH_TABLE_BITS) as usize];
                         if entry & ENTRY_SUBTABLE != 0 {
                             lbits.try_skip(LITERAL_LENGTH_TABLE_BITS)?;
                             entry = trees.lt.table[(((entry >> ENTRY_SHIFT) & 0xFFFF)
@@ -620,10 +621,13 @@ fn decode_trees(
             if presym > 18 || (presym == 16 && i == 0) {
                 return Err(Error::InvalidBitstream);
             }
-            let (extra_bits, extra) = [(2, 3), (3, 3), (7, 11), (0, 0)][(presym as usize - 16) & 0x3];
+            let (extra_bits, extra) =
+                [(2, 3), (3, 3), (7, 11), (0, 0)][(presym as usize - 16) & 0x3];
             let count = bits.pop(extra_bits) as usize + extra;
             let l = if presym == 16 { lengths[i - 1] } else { 0 };
-            let p = lengths.get_mut(i..i + count).ok_or(Error::InvalidBitstream)?;
+            let p = lengths
+                .get_mut(i..i + count)
+                .ok_or(Error::InvalidBitstream)?;
             p.iter_mut().for_each(|p| *p = l);
             i += count;
         }
@@ -664,10 +668,13 @@ fn decode_trees(
             if presym > 18 || (presym == 16 && i == 0) {
                 return Err(Error::InvalidBitstream);
             }
-            let (extra_bits, extra) = [(2, 3), (3, 3), (7, 11), (0, 0)][(presym as usize - 16) & 0x3];
+            let (extra_bits, extra) =
+                [(2, 3), (3, 3), (7, 11), (0, 0)][(presym as usize - 16) & 0x3];
             let count = bits.try_pop(extra_bits)? as usize + extra;
             let l = if presym == 16 { lengths[i - 1] } else { 0 };
-            let p = lengths.get_mut(i..i + count).ok_or(Error::InvalidBitstream)?;
+            let p = lengths
+                .get_mut(i..i + count)
+                .ok_or(Error::InvalidBitstream)?;
             p.iter_mut().for_each(|p| *p = l);
             i += count;
         }
@@ -1302,7 +1309,8 @@ impl DistanceTree {
     }
 }
 
-const USE_UNALIGNED_READS_LE: bool = cfg!(any(target_arch = "x86", target_arch = "x86_64"));
+const USE_UNALIGNED_READS_LE: bool =
+    cfg!(any(target_arch = "x86", target_arch = "x86_64")) && cfg!(not(debug_assertions));
 
 const RING_BUFFER_SIZE: usize = 32768;
 const LITERAL_LENGTH_TREE_SIZE: usize = 1334;
