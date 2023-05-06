@@ -1,6 +1,6 @@
 [package]
 name = "yazi"
-version = "0.1.5"
+version = "0.1.6"
 authors = ["Chad Brokaw <cbrokaw@gmail.com>"]
 edition = "2018"
 description = "DEFLATE/zlib compression and decompression."

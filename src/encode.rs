@@ -238,13 +238,13 @@ impl<'a, S: Sink> Drop for EncoderStream<'a, S> {
 impl<'a, S: Sink> Write for EncoderStream<'a, S> {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
         match self.ctx.deflate(buf, &mut self.sink, false) {
-            Ok(_) => return Ok(buf.len()),
+            Ok(_) => Ok(buf.len()),
             Err(err) => match err {
-                Error::Io(err) => return Err(err),
+                Error::Io(err) => Err(err),
                 Error::Underflow | Error::Overflow => {
-                    return Err(io::Error::from(io::ErrorKind::InvalidInput))
+                    Err(io::Error::from(io::ErrorKind::InvalidInput))
                 }
-                _ => return Err(io::Error::from(io::ErrorKind::InvalidData)),
+                _ => Err(io::Error::from(io::ErrorKind::InvalidData)),
             },
         }
     }
@@ -290,7 +290,7 @@ struct DeflateContext {
 
 impl DeflateContext {
     fn deflate<S: Sink>(&mut self, buf: &[u8], sink: &mut S, is_last: bool) -> Result<(), Error> {
-        if !is_last && buf.len() == 0 {
+        if !is_last && buf.is_empty() {
             return Ok(());
         }
         self.deflate_inner(buf, sink, is_last)?;
@@ -330,7 +330,7 @@ impl DeflateContext {
                         dict.dict[DICTIONARY_SIZE + dst_pos] = c;
                     }
                     hash = ((hash << HASH_SHIFT) ^ u32::from(c)) & (HASH_SIZE as u32 - 1);
-                    dict.next[(ins_pos & DICT_MASK) as usize] = dict.hash[hash as usize];
+                    dict.next[ins_pos & DICT_MASK] = dict.hash[hash as usize];
                     dict.hash[hash as usize] = ins_pos as u16;
                     dst_pos = (dst_pos + 1) & DICT_MASK;
                     ins_pos += 1;
@@ -445,7 +445,7 @@ impl DeflateContext {
             self.dict.len = (self.dict.len + len_to_move).min(DICTIONARY_SIZE);
             let lz_buf_tight = self.cb.pos > CODE_BUFFER_SIZE - 8;
             let raw = self.flags & FORCE_RAW != 0;
-            let fat = ((self.cb.pos * 115) >> 7) >= self.cb.total_bytes as usize;
+            let fat = ((self.cb.pos * 115) >> 7) >= self.cb.total_bytes;
             let fat_or_raw = (self.cb.total_bytes > 31 * 1024) && (fat || raw);
             if lz_buf_tight || fat_or_raw {
                 self.dict.lookahead_size = lookahead_size;
@@ -575,9 +575,9 @@ impl DeflateContext {
             }
             num_dist_codes -= 1;
         }
-        (&mut code_sizes_to_pack[0..num_lit_codes])
+        code_sizes_to_pack[0..num_lit_codes]
             .copy_from_slice(&self.lt.code_sizes[0..num_lit_codes]);
-        (&mut code_sizes_to_pack[num_lit_codes..num_lit_codes + num_dist_codes])
+        code_sizes_to_pack[num_lit_codes..num_lit_codes + num_dist_codes]
             .copy_from_slice(&self.dt.code_sizes[0..num_dist_codes]);
         let total_code_sizes_to_pack = num_lit_codes + num_dist_codes;
         let mut num_packed = 0;
@@ -645,10 +645,10 @@ impl DeflateContext {
 
     fn start_static_block<S: Sink>(&mut self, sink: &mut S) -> Result<(), Error> {
         let lengths = &mut self.lt.code_sizes;
-        (&mut lengths[0..144]).iter_mut().for_each(|p| *p = 8);
-        (&mut lengths[144..256]).iter_mut().for_each(|p| *p = 9);
-        (&mut lengths[256..280]).iter_mut().for_each(|p| *p = 7);
-        (&mut lengths[280..288]).iter_mut().for_each(|p| *p = 8);
+        lengths[0..144].iter_mut().for_each(|p| *p = 8);
+        lengths[144..256].iter_mut().for_each(|p| *p = 9);
+        lengths[256..280].iter_mut().for_each(|p| *p = 7);
+        lengths[280..288].iter_mut().for_each(|p| *p = 8);
         self.dt.code_sizes = [5; 32];
         self.lt.optimize(true);
         self.dt.optimize(true);
@@ -1248,8 +1248,8 @@ impl Dictionary {
         if max_match_len <= match_len {
             return (match_dist, match_len);
         }
-        let mut c01 = self.read_u16(pos as usize + match_len as usize - 1);
-        let s01 = self.read_u16(pos as usize);
+        let mut c01 = self.read_u16(pos + match_len - 1);
+        let s01 = self.read_u16(pos);
         'outer: loop {
             let mut dist;
             'found: loop {
@@ -1258,13 +1258,13 @@ impl Dictionary {
                     return (match_dist, match_len);
                 }
                 for _ in 0..3 {
-                    let next_probe_pos = self.next[probe_pos as usize] as usize;
+                    let next_probe_pos = self.next[probe_pos] as usize;
                     dist = (lookahead_pos - next_probe_pos) & 0xFFFF;
                     if next_probe_pos == 0 || dist > max_dist {
                         return (match_dist, match_len);
                     }
                     probe_pos = next_probe_pos & DICTIONARY_SIZE_MASK;
-                    if self.read_u16((probe_pos + match_len - 1) as usize) == c01 {
+                    if self.read_u16(probe_pos + match_len - 1) == c01 {
                         break 'found;
                     }
                 }
@@ -1272,7 +1272,7 @@ impl Dictionary {
             if dist == 0 {
                 return (match_dist, match_len);
             }
-            if self.read_u16(probe_pos as usize) != s01 {
+            if self.read_u16(probe_pos) != s01 {
                 continue;
             }
             let mut p = pos + 2;
@@ -1293,7 +1293,7 @@ impl Dictionary {
                         if match_len == max_match_len {
                             return (match_dist, match_len);
                         }
-                        c01 = self.read_u16((pos + match_len - 1) as usize)
+                        c01 = self.read_u16(pos + match_len - 1)
                     }
                     continue 'outer;
                 }
@@ -1366,7 +1366,7 @@ impl<'a> Sink for BufSink<'a> {
         if self.pos + len > self.buffer.len() {
             return Err(Error::Overflow);
         }
-        (&mut self.buffer[self.pos..self.pos + len]).copy_from_slice(buf);
+        self.buffer[self.pos..self.pos + len].copy_from_slice(buf);
         self.pos += len;
         Ok(())
     }

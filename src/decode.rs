@@ -128,13 +128,13 @@ impl<'a, S: Sink> Drop for DecoderStream<'a, S> {
 impl<'a, S: Sink> Write for DecoderStream<'a, S> {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
         match self.ctx.inflate(buf, &mut self.sink, false) {
-            Ok(_) => return Ok(buf.len()),
+            Ok(_) => Ok(buf.len()),
             Err(err) => match err {
-                Error::Io(err) => return Err(err),
+                Error::Io(err) => Err(err),
                 Error::Underflow | Error::Overflow => {
-                    return Err(io::Error::from(io::ErrorKind::InvalidInput))
+                    Err(io::Error::from(io::ErrorKind::InvalidInput))
                 }
-                _ => return Err(io::Error::from(io::ErrorKind::InvalidData)),
+                _ => Err(io::Error::from(io::ErrorKind::InvalidData)),
             },
         }
     }
@@ -209,7 +209,7 @@ impl InflateContext {
         sink: &mut S,
         is_last: bool,
     ) -> Result<(), Error> {
-        while !self.done && (is_last || buf.len() != 0) {
+        while !self.done && (is_last || !buf.is_empty()) {
             let mut bits = Bits::new(self.bit_buffer, self.bits_in);
             let (res, used_remainder) = if self.remainder.avail != 0 {
                 let used = self.remainder.push(buf);
@@ -250,18 +250,16 @@ impl InflateContext {
             };
             self.bit_buffer = bits.bit_buffer;
             self.bits_in = bits.bits_in;
-            let more_input = buf.len() != 0;
+            let more_input = !buf.is_empty();
             match res {
                 Err(Error::Underflow) => {
                     if is_last && !more_input {
                         return res;
                     } else if !more_input {
                         return Ok(());
-                    } else {
-                        if self.remainder.avail != 0 || !used_remainder {
-                            let used = self.remainder.push(buf);
-                            buf = &buf[used..];
-                        }
+                    } else if self.remainder.avail != 0 || !used_remainder {
+                        let used = self.remainder.push(buf);
+                        buf = &buf[used..];
                     }
                 }
                 Err(_) => {
@@ -330,11 +328,11 @@ fn inflate<S: Sink>(
                     0 => {
                         bits.try_skip(bits.bits_in & 7)?;
                         let mut parts = [0u32; 4];
-                        for i in 0..4 {
+                        for part in &mut parts {
                             if bits.bits_in >= 8 {
-                                parts[i] = bits.pop(8) as u32;
+                                *part = bits.pop(8) as u32;
                             } else {
-                                parts[i] = *source
+                                *part = *source
                                     .buffer
                                     .get(source.pos)
                                     .ok_or(Error::InvalidBitstream)?
@@ -368,12 +366,11 @@ fn inflate<S: Sink>(
                     }
                     1 => {
                         const DISTANCE_LENGTHS: [u8; 32] = [5; 32];
-                        let mut lengths: [u8; 288] =
-                            unsafe { std::mem::MaybeUninit::uninit().assume_init() };
-                        (&mut lengths[0..144]).iter_mut().for_each(|p| *p = 8);
-                        (&mut lengths[144..256]).iter_mut().for_each(|p| *p = 9);
-                        (&mut lengths[256..280]).iter_mut().for_each(|p| *p = 7);
-                        (&mut lengths[280..288]).iter_mut().for_each(|p| *p = 8);
+                        let mut lengths: [u8; 288] = [0; 288];
+                        lengths[0..144].iter_mut().for_each(|p| *p = 8);
+                        lengths[144..256].iter_mut().for_each(|p| *p = 9);
+                        lengths[256..280].iter_mut().for_each(|p| *p = 7);
+                        lengths[280..288].iter_mut().for_each(|p| *p = 8);
                         trees.lt.build(&lengths[..288]);
                         trees.dt.build(&DISTANCE_LENGTHS);
                         *state = State::Inflate;
@@ -580,7 +577,7 @@ fn decode_trees(
     dt: &mut DistanceTree,
     is_last: bool,
 ) -> Result<(), Error> {
-    let mut lengths: [u8; MAX_LENGTHS] = unsafe { std::mem::MaybeUninit::uninit().assume_init() };
+    let mut lengths: [u8; MAX_LENGTHS] = [0; MAX_LENGTHS];
     bits.fill(source);
     let ltlen;
     let dtlen;
@@ -591,8 +588,8 @@ fn decode_trees(
         if ltlen > 286 || dtlen > 30 {
             return Err(Error::InvalidBitstream);
         }
-        for i in 0..19 {
-            lengths[i] = 0;
+        for length in &mut lengths[0..19] {
+            *length = 0;
         }
         bits.fill(source);
         for code in &PRECODE_SWIZZLE[..ptlen] {
@@ -638,8 +635,8 @@ fn decode_trees(
         if ltlen > 286 || dtlen > 30 {
             return Err(Error::InvalidBitstream);
         }
-        for i in 0..19 {
-            lengths[i] = 0;
+        for length in &mut lengths[0..19] {
+            *length = 0;
         }
         bits.fill(source);
         for code in &PRECODE_SWIZZLE[..ptlen] {
@@ -697,7 +694,7 @@ fn build_tree(
 ) -> bool {
     let mut len_counts = [0usize; MAX_CODE_SIZE + 1];
     let mut offsets = [0usize; MAX_CODE_SIZE + 1];
-    let mut sorted_entries: [u32; 288] = unsafe { std::mem::MaybeUninit::uninit().assume_init() };
+    let mut sorted_entries: [u32; 288] = [0; 288];
     for &len in lengths {
         len_counts[len as usize] += 1;
     }
@@ -711,7 +708,7 @@ fn build_tree(
     for sym in 0..lengths.len() {
         let len = lengths[sym];
         let idx = &mut offsets[len as usize];
-        sorted_entries[(*idx)] = entries[sym as usize];
+        sorted_entries[(*idx)] = entries[sym];
         *idx += 1;
     }
     let sorted_entries = &mut sorted_entries[offsets[0]..];
@@ -829,8 +826,8 @@ fn verify_zlib_header(source: &mut Source, bits: &mut Bits) -> Result<(), Error>
 
 fn read_zlib_checksum(source: &mut Source, bits: &mut Bits) -> Result<u32, Error> {
     let mut parts = [0u32; 4];
-    for i in 0..4 {
-        parts[i] = bits.try_pop_source(source, 8)?;
+    for part in &mut parts {
+        *part = bits.try_pop_source(source, 8)?;
     }
     Ok(parts[0] << 24 | parts[1] << 16 | parts[2] << 8 | parts[3])
 }
@@ -872,7 +869,7 @@ impl Remainder {
         }
         let extra = self.buffer.len() - self.avail;
         let copy_len = extra.min(buf.len());
-        (&mut self.buffer[self.avail..self.avail + copy_len]).copy_from_slice(&buf[0..copy_len]);
+        self.buffer[self.avail..self.avail + copy_len].copy_from_slice(&buf[0..copy_len]);
         self.avail += copy_len;
         copy_len
     }
@@ -903,7 +900,7 @@ impl<'a> Source<'a> {
 
     fn try_get(&mut self, len: usize) -> Result<&[u8], Error> {
         let bytes = self.get(len);
-        if bytes.len() == 0 {
+        if bytes.is_empty() {
             return Err(Error::Underflow);
         }
         Ok(bytes)
@@ -926,7 +923,7 @@ struct Bits {
     bits_in: u32,
 }
 
-impl<'a> Bits {
+impl Bits {
     fn new(bit_buffer: u64, bits_in: u32) -> Self {
         Self {
             bit_buffer,
@@ -940,42 +937,29 @@ impl<'a> Bits {
 
     #[inline(always)]
     fn fill(&mut self, source: &mut Source) -> u32 {
-        const NBITS: u32 = 8 * 8 - 1;
-        if USE_UNALIGNED_READS_LE && source.avail >= 8 {
-            let v = unsafe { *(source.buffer.as_ptr().add(source.pos) as *const u64) };
-            let bits_in = self.bits_in;
-            self.bit_buffer |= v << bits_in;
-            let used = ((bits_in ^ NBITS) >> 3) as usize;
-            source.pos += used;
-            source.avail -= used;
-            self.bits_in |= NBITS & !7;
-        } else {
-            let count = (64 - self.bits_in as usize) >> 3;
-            let bytes = source.get(count);
-            let len = bytes.len();
-            let mut i = 0;
-            while (i + 4) <= len {
-                use std::convert::TryInto;
-                let v = u32::from_le_bytes((&bytes[i..i + 4]).try_into().unwrap()) as u64;
-                self.bit_buffer |= v << self.bits_in;
-                self.bits_in += 32;
-                i += 4;
-            }
-            while i < len {
-                self.bit_buffer |= (bytes[i] as u64) << self.bits_in;
-                self.bits_in += 8;
-                i += 1;
-            }
+        let count = (64 - self.bits_in as usize) >> 3;
+        let bytes = source.get(count);
+        let len = bytes.len();
+        let mut i = 0;
+        while (i + 4) <= len {
+            use std::convert::TryInto;
+            let v = u32::from_le_bytes((&bytes[i..i + 4]).try_into().unwrap()) as u64;
+            self.bit_buffer |= v << self.bits_in;
+            self.bits_in += 32;
+            i += 4;
+        }
+        while i < len {
+            self.bit_buffer |= (bytes[i] as u64) << self.bits_in;
+            self.bits_in += 8;
+            i += 1;
         }
         self.bits_in
     }
 
     #[inline(always)]
     fn try_pop_source(&mut self, source: &mut Source, len: u32) -> Result<u32, Error> {
-        if self.bits_in < len {
-            if self.fill(source) < len {
-                return Err(Error::Underflow);
-            }
+        if self.bits_in < len && self.fill(source) < len {
+            return Err(Error::Underflow);
         }
         let bits = self.bit_buffer & ((1 << len) - 1);
         self.bit_buffer >>= len;
@@ -1026,46 +1010,12 @@ impl<'a> Bits {
 
 #[inline(always)]
 fn copy_match(buf: &mut [u8], pos: usize, len: usize, buf_end: usize) {
-    let limit = buf.len();
     let dist = buf_end - pos;
-    const WORDBYTES: usize = 8;
-    unsafe {
-        let src = buf.as_ptr().add(pos);
-        let dest = buf.as_mut_ptr().add(buf_end);
-        let next_end = buf_end + len;
-        if USE_UNALIGNED_READS_LE && limit - next_end >= WORDBYTES - 1 {
-            if dist >= WORDBYTES {
-                let src = src as *const u64;
-                let dest = dest as *mut u64;
-                let mut i = 0;
-                let mut j = 0;
-                while i < len {
-                    *dest.add(j) = *src.add(j);
-                    i += WORDBYTES;
-                    j += 1;
-                }
-            } else if dist == 1 {
-                let mut v = (*src) as u64;
-                v |= v << 8;
-                v |= v << 16;
-                v |= v << 32;
-                let dest = dest as *mut u64;
-                let mut i = 0;
-                let mut j = 0;
-                while i < len {
-                    *dest.add(j) = v;
-                    i += WORDBYTES;
-                    j += 1;
-                }
-            } else {
-                for i in 0..len {
-                    *dest.add(i) = *src.add(i);
-                }
-            }
-        } else {
-            for i in 0..len {
-                *dest.add(i) = *src.add(i);
-            }
+    if dist > len {
+        buf.copy_within(pos..pos + len, buf_end);
+    } else {
+        for i in 0..len {
+            buf[buf_end + i] = buf[pos + i];
         }
     }
 }
@@ -1087,21 +1037,10 @@ struct VecSink<'a> {
 impl<'a> VecSink<'a> {
     fn new(buffer: &'a mut Vec<u8>) -> Self {
         let start_pos = buffer.len();
-        unsafe {
-            buffer.set_len(buffer.capacity());
-        }
         Self {
             buffer,
             start_pos,
             pos: start_pos,
-        }
-    }
-
-    fn grow(&mut self, amount: usize) {
-        unsafe {
-            self.buffer.set_len(self.pos);
-            self.buffer.reserve(amount);
-            self.buffer.set_len(self.buffer.capacity());
         }
     }
 }
@@ -1119,20 +1058,14 @@ impl<'a> Sink for VecSink<'a> {
 
     #[inline(always)]
     fn push(&mut self, byte: u8) -> Result<(), Error> {
-        if self.pos >= self.buffer.len() {
-            self.grow(1);
-        }
-        self.buffer[self.pos] = byte;
+        self.buffer.push(byte);
         self.pos += 1;
         Ok(())
     }
 
     fn write(&mut self, bytes: &[u8]) -> Result<(), Error> {
         let len = bytes.len();
-        if self.pos + len > self.buffer.len() {
-            self.grow(len);
-        }
-        (&mut self.buffer[self.pos..self.pos + len]).copy_from_slice(bytes);
+        self.buffer.extend_from_slice(bytes);
         self.pos += len;
         Ok(())
     }
@@ -1144,10 +1077,8 @@ impl<'a> Sink for VecSink<'a> {
             return Err(Error::InvalidBitstream);
         }
         let pos = self.pos - dist;
-        if self.pos + len > self.buffer.len() {
-            self.grow(len);
-        }
-        copy_match(&mut self.buffer, pos, len, self.pos);
+        self.buffer.resize(self.pos + len, 0);
+        copy_match(self.buffer, pos, len, self.pos);
         self.pos += len;
         Ok(())
     }
@@ -1177,7 +1108,7 @@ impl<'a> Sink for BufSink<'a> {
     fn write(&mut self, bytes: &[u8]) -> Result<(), Error> {
         let len = bytes.len();
         if self.pos + len <= self.buffer.len() {
-            (&mut self.buffer[self.pos..self.pos + len]).copy_from_slice(bytes);
+            self.buffer[self.pos..self.pos + len].copy_from_slice(bytes);
             self.pos += len;
             Ok(())
         } else {
@@ -1308,9 +1239,6 @@ impl DistanceTree {
         build_tree(&mut self.table, lengths, &DISTANCE_ENTRIES, 8, 15)
     }
 }
-
-const USE_UNALIGNED_READS_LE: bool =
-    cfg!(any(target_arch = "x86", target_arch = "x86_64")) && cfg!(not(debug_assertions));
 
 const RING_BUFFER_SIZE: usize = 32768;
 const LITERAL_LENGTH_TREE_SIZE: usize = 1334;

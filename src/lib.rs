@@ -229,13 +229,6 @@
 //! it should produce an identical bitstream for a given set of options. The
 //! decompressor is based on the techniques in libdeflate (<https://github.com/ebiggers/libdeflate>)
 //! by Eric Biggers.
-//!
-//! Compression performance is roughly equivalent to miniz_oxide which places it about
-//! 20-25% slower than miniz on average. There is likely room for improvement here. The
-//! decompressor, however, has been highly optimized for x86-64 and beats miniz by 20-30%
-//! in my test cases and zlib by an even larger margin. This does come at the cost of
-//! some isolated sections of unsafe code in the decompressor.
-//!
 
 mod decode;
 mod encode;
@@ -310,6 +303,12 @@ impl Adler32 {
     /// Returns the checksum.
     pub fn finish(self) -> u32 {
         self.0
+    }
+}
+
+impl Default for Adler32 {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
