@@ -1,9 +1,6 @@
 //! RFC 1590 compression implementation.
 
-#![allow(
-    clippy::needless_range_loop,
-    clippy::new_without_default
-)]
+#![allow(clippy::needless_range_loop, clippy::new_without_default)]
 
 use super::{Adler32, Error, Format};
 use std::{
@@ -580,8 +577,7 @@ impl DeflateContext {
             }
             num_dist_codes -= 1;
         }
-        code_sizes_to_pack[0..num_lit_codes]
-            .copy_from_slice(&self.lt.code_sizes[0..num_lit_codes]);
+        code_sizes_to_pack[0..num_lit_codes].copy_from_slice(&self.lt.code_sizes[0..num_lit_codes]);
         code_sizes_to_pack[num_lit_codes..num_lit_codes + num_dist_codes]
             .copy_from_slice(&self.dt.code_sizes[0..num_dist_codes]);
         let total_code_sizes_to_pack = num_lit_codes + num_dist_codes;
