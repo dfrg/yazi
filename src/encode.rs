@@ -1,10 +1,12 @@
 //! RFC 1590 compression implementation.
 
 use super::{Adler32, Error, Format};
-use std::{
-    convert::TryInto,
-    io::{self, Write},
-};
+use alloc::boxed::Box;
+use alloc::vec::Vec;
+use core::convert::TryInto;
+
+#[cfg(feature = "std")]
+use std::io::{self, Write};
 
 /// The level of compression-- a compromise between speed and size.
 #[derive(Copy, Clone, PartialEq, Debug)]
@@ -142,6 +144,7 @@ impl Encoder {
     }
 
     /// Creates an encoder stream that will write into the specified writer.
+    #[cfg(feature = "std")]
     pub fn stream<'a, W: Write>(
         &'a mut self,
         writer: &'a mut W,
@@ -235,6 +238,7 @@ impl<'a, S: Sink> Drop for EncoderStream<'a, S> {
     }
 }
 
+#[cfg(feature = "std")]
 impl<'a, S: Sink> Write for EncoderStream<'a, S> {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
         match self.ctx.deflate(buf, &mut self.sink, false) {
@@ -927,7 +931,7 @@ mod huffman {
                 new_syms[offsets[j] as usize] = *sym;
                 offsets[j] += 1;
             }
-            std::mem::swap(&mut cur_syms, &mut new_syms);
+            core::mem::swap(&mut cur_syms, &mut new_syms);
         }
         cur_syms
     }
@@ -1475,6 +1479,7 @@ impl<'a> Sink for VecSink<'a> {
     }
 }
 
+#[cfg(feature = "std")]
 struct WriterSink<W> {
     writer: W,
     buffer: [u8; OUT_BUFFER_SIZE],
@@ -1484,6 +1489,7 @@ struct WriterSink<W> {
     written: u64,
 }
 
+#[cfg(feature = "std")]
 impl<W> WriterSink<W> {
     fn new(writer: W) -> Self {
         Self {
@@ -1497,6 +1503,7 @@ impl<W> WriterSink<W> {
     }
 }
 
+#[cfg(feature = "std")]
 impl<W: Write> Sink for WriterSink<W> {
     #[inline(always)]
     fn put_bits(&mut self, bits: u32, len: u32) -> Result<(), Error> {

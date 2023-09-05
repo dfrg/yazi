@@ -230,9 +230,14 @@
 //! decompressor is based on the techniques in libdeflate (<https://github.com/ebiggers/libdeflate>)
 //! by Eric Biggers.
 
+#![cfg_attr(not(feature = "std"), no_std)]
+
+extern crate alloc;
+
 mod decode;
 mod encode;
 
+#[cfg(feature = "std")]
 use std::io;
 
 pub use decode::{decompress, Decoder, DecoderStream};
@@ -259,9 +264,13 @@ pub enum Error {
     /// Attempt to write into a finished stream.
     Finished,
     /// A system I/O error.
+    /// 
+    /// Only available with the `std` feature enabled.
+    #[cfg(feature = "std")]
     Io(io::Error),
 }
 
+#[cfg(feature = "std")]
 impl From<io::Error> for Error {
     fn from(error: io::Error) -> Self {
         Self::Io(error)
@@ -315,6 +324,7 @@ impl Default for Adler32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alloc::vec::Vec;
 
     fn generate_bytes() -> Vec<u8> {
         const BYTES: &[u8; 26] = b"abcdefghijklmnopqrstuvwxyz";

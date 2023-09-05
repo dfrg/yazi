@@ -11,4 +11,6 @@ repository = "https://github.com/dfrg/yazi"
 homepage = "https://github.com/dfrg/yazi"
 readme = "README.md"
 
-[dependencies]
+[features]
+default = ["std"]
+std = []

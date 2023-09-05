@@ -1,6 +1,10 @@
 //! RFC 1590 decompression implementation.
 
 use super::{Error, Format};
+use alloc::boxed::Box;
+use alloc::vec::Vec;
+
+#[cfg(feature = "std")]
 use std::io::{self, Write};
 
 /// Stateful context for decompression.
@@ -27,6 +31,7 @@ impl Decoder {
     }
 
     /// Creates a decoder stream that will write into the specified writer.
+    #[cfg(feature = "std")]
     pub fn stream<'a, W: Write>(
         &'a mut self,
         writer: &'a mut W,
@@ -125,6 +130,7 @@ impl<'a, S: Sink> Drop for DecoderStream<'a, S> {
     }
 }
 
+#[cfg(feature = "std")]
 impl<'a, S: Sink> Write for DecoderStream<'a, S> {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
         match self.ctx.inflate(buf, &mut self.sink, false) {
@@ -942,7 +948,7 @@ impl Bits {
         let len = bytes.len();
         let mut i = 0;
         while (i + 4) <= len {
-            use std::convert::TryInto;
+            use core::convert::TryInto;
             let v = u32::from_le_bytes((&bytes[i..i + 4]).try_into().unwrap()) as u64;
             self.bit_buffer |= v << self.bits_in;
             self.bits_in += 32;
@@ -1131,12 +1137,14 @@ impl<'a> Sink for BufSink<'a> {
     }
 }
 
+#[cfg(feature = "std")]
 struct WriterSink<W> {
     writer: W,
     ring: RingBuffer,
     written: u64,
 }
 
+#[cfg(feature = "std")]
 impl<W: Write> Sink for WriterSink<W> {
     fn written(&self) -> u64 {
         self.written
