@@ -1,5 +1,10 @@
 //! RFC 1590 compression implementation.
 
+#![allow(
+    clippy::needless_range_loop,
+    clippy::new_without_default
+)]
+
 use super::{Adler32, Error, Format};
 use std::{
     convert::TryInto,
@@ -321,8 +326,8 @@ impl DeflateContext {
                 let dict = &mut self.dict;
                 let mut dst_pos = (lookahead_pos + lookahead_size) & DICT_MASK;
                 let mut ins_pos = lookahead_pos + lookahead_size - 2;
-                let mut hash = (u32::from(dict.dict[(ins_pos & DICT_MASK)]) << HASH_SHIFT)
-                    ^ u32::from(dict.dict[((ins_pos + 1) & DICT_MASK)]);
+                let mut hash = (u32::from(dict.dict[ins_pos & DICT_MASK]) << HASH_SHIFT)
+                    ^ u32::from(dict.dict[(ins_pos + 1) & DICT_MASK]);
                 lookahead_size += num_bytes_to_process;
                 for &c in &data[src_pos..src_pos + num_bytes_to_process] {
                     dict.dict[dst_pos] = c;
@@ -468,7 +473,7 @@ impl DeflateContext {
             && (self.dict.lookahead_pos - self.dict.code_buffer_offset) <= self.dict.len;
         self.cb.init_flag();
         if self.flags & WRITE_ZLIB_HEADER != 0 && self.block_index == 0 {
-            let header = make_zlib_header(self.flags as u32);
+            let header = make_zlib_header(self.flags);
             sink.put_bits(header[0].into(), 8)?;
             sink.put_bits(header[1].into(), 8)?;
         }
@@ -907,7 +912,7 @@ mod huffman {
         for freq in syms0.iter() {
             let key = freq.key as usize;
             hist[0][key & 0xFF] += 1;
-            hist[1][((key >> 8) & 0xFF)] += 1;
+            hist[1][(key >> 8) & 0xFF] += 1;
         }
         let mut passes = 2;
         if syms0.len() == hist[1][0] as usize {
@@ -976,7 +981,7 @@ mod huffman {
                 root -= 1;
             }
             while avail > used {
-                a[next as usize].key = depth as u16;
+                a[next as usize].key = depth;
                 next -= 1;
                 avail -= 1;
             }
@@ -1521,7 +1526,7 @@ impl<W: Write> Sink for WriterSink<W> {
         if self.pos + len > self.buffer.len() {
             return Err(Error::Overflow);
         }
-        (&mut self.buffer[self.pos..self.pos + len]).copy_from_slice(buf);
+        self.buffer[self.pos..self.pos + len].copy_from_slice(buf);
         self.pos += len;
         Ok(())
     }
