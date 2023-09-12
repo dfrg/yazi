@@ -1,5 +1,11 @@
 //! RFC 1590 decompression implementation.
 
+#![allow(
+    clippy::needless_range_loop,
+    clippy::new_without_default,
+    clippy::too_many_arguments
+)]
+
 use super::{Error, Format};
 use alloc::boxed::Box;
 use alloc::vec::Vec;
@@ -336,7 +342,7 @@ fn inflate<S: Sink>(
                         let mut parts = [0u32; 4];
                         for part in &mut parts {
                             if bits.bits_in >= 8 {
-                                *part = bits.pop(8) as u32;
+                                *part = bits.pop(8);
                             } else {
                                 *part = *source
                                     .buffer
@@ -714,7 +720,7 @@ fn build_tree(
     for sym in 0..lengths.len() {
         let len = lengths[sym];
         let idx = &mut offsets[len as usize];
-        sorted_entries[(*idx)] = entries[sym];
+        sorted_entries[*idx] = entries[sym];
         *idx += 1;
     }
     let sorted_entries = &mut sorted_entries[offsets[0]..];
