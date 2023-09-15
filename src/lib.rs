@@ -264,7 +264,7 @@ pub enum Error {
     /// Attempt to write into a finished stream.
     Finished,
     /// A system I/O error.
-    /// 
+    ///
     /// Only available with the `std` feature enabled.
     #[cfg(feature = "std")]
     Io(io::Error),
