@@ -1629,6 +1629,7 @@ const CODE_BUFFER_SIZE: usize = 64 * 1024;
 const HASH_BITS: usize = 15;
 const HASH_SHIFT: usize = (HASH_BITS + 2) / 3;
 const HASH_SIZE: usize = 1 << HASH_BITS;
+#[cfg(feature = "std")]
 const OUT_BUFFER_SIZE: usize = (CODE_BUFFER_SIZE * 13) / 10;
 const MIN_MATCH_LEN: usize = 3;
 const MAX_MATCH_LEN: usize = 258;

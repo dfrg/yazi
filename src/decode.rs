@@ -1190,11 +1190,13 @@ impl<W: Write> Sink for WriterSink<W> {
     }
 }
 
+#[cfg(feature = "std")]
 struct RingBuffer {
     buffer: [u8; RING_BUFFER_SIZE],
     len: usize,
 }
 
+#[cfg(feature = "std")]
 impl RingBuffer {
     #[inline(always)]
     fn new() -> Self {
@@ -1254,6 +1256,7 @@ impl DistanceTree {
     }
 }
 
+#[cfg(feature = "std")]
 const RING_BUFFER_SIZE: usize = 32768;
 const LITERAL_LENGTH_TREE_SIZE: usize = 1334;
 const DISTANCE_TREE_SIZE: usize = 402;
