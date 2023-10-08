@@ -326,6 +326,9 @@ mod tests {
     use super::*;
     use alloc::vec::Vec;
 
+    #[cfg(target_family = "wasm")]
+    use wasm_bindgen_test::wasm_bindgen_test as test;
+
     fn generate_bytes() -> Vec<u8> {
         const BYTES: &[u8; 26] = b"abcdefghijklmnopqrstuvwxyz";
         let mut buf = Vec::new();
