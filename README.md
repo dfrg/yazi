@@ -16,13 +16,6 @@ the zlib wrapper. It provides streaming compression and decompression.
 
 ## Usage
 
-Add this to your `Cargo.toml`:
-
-```toml
-[dependencies]
-yazi = "0.1.4"
-```
-
 The following demonstrates simple usage for compressing and decompressing in-memory buffers:
 
 ```rust
