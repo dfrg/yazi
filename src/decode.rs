@@ -164,8 +164,7 @@ impl<'a, S: Sink> Write for DecoderStream<'a, S> {
 pub fn decompress(buf: &[u8], format: Format) -> Result<(Vec<u8>, Option<u32>), Error> {
     let mut decoder = Decoder::new();
     decoder.set_format(format);
-    let mut vec = Vec::new();
-    vec.reserve(buf.len() * 2);
+    let mut vec = Vec::with_capacity(buf.len() * 2);
     let mut stream = decoder.stream_into_vec(&mut vec);
     stream.write(buf)?;
     let (_, checksum) = stream.finish()?;
