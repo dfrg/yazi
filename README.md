@@ -5,14 +5,14 @@ the zlib wrapper. It provides streaming compression and decompression.
 
 [![Crates.io][crates-badge]][crates-url]
 [![Docs.rs][docs-badge]][docs-url]
-[![MIT licensed][mit-badge]][mit-url]
+[![Apache 2.0 or MIT license.][license-badge]][license-url]
 
 [crates-badge]: https://img.shields.io/crates/v/yazi.svg
 [crates-url]: https://crates.io/crates/yazi
 [docs-badge]: https://docs.rs/yazi/badge.svg
 [docs-url]: https://docs.rs/yazi
-[mit-badge]: https://img.shields.io/badge/license-MIT-blue.svg
-[mit-url]: LICENSE
+[license-badge]: https://img.shields.io/badge/license-Apache--2.0_OR_MIT-blue.svg
+[license-url]: #license
 
 ## Usage
 
@@ -33,3 +33,24 @@ assert_eq!(data, &decompressed[..]);
 ```
 
 For detail on more advanced usage, see the full API [documentation](https://docs.rs/yazi).
+
+## License
+
+Licensed under either of
+
+- Apache License, Version 2.0
+   ([LICENSE-APACHE](LICENSE-APACHE) or <http://www.apache.org/licenses/LICENSE-2.0>)
+- MIT license
+   ([LICENSE-MIT](LICENSE-MIT) or <http://opensource.org/licenses/MIT>)
+
+at your option.
+
+## Contribution
+
+Contributions are welcome by pull request. The [Rust code of conduct] applies.
+
+Unless you explicitly state otherwise, any contribution intentionally submitted
+for inclusion in the work by you, as defined in the Apache-2.0 license, shall be
+licensed as above, without any additional terms or conditions.
+
+[Rust Code of Conduct]: https://www.rust-lang.org/policies/code-of-conduct
