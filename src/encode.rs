@@ -200,7 +200,7 @@ pub struct EncoderStream<'a, S: Sink> {
     finished: bool,
 }
 
-impl<'a, S: Sink> EncoderStream<'a, S> {
+impl<S: Sink> EncoderStream<'_, S> {
     /// Writes the specified buffer to the stream, producing compressed data
     /// in the output.
     pub fn write(&mut self, buf: &[u8]) -> Result<(), Error> {
@@ -230,7 +230,7 @@ impl<'a, S: Sink> EncoderStream<'a, S> {
     }
 }
 
-impl<'a, S: Sink> Drop for EncoderStream<'a, S> {
+impl<S: Sink> Drop for EncoderStream<'_, S> {
     fn drop(&mut self) {
         if !self.finished {
             self.finished = true;
@@ -241,7 +241,7 @@ impl<'a, S: Sink> Drop for EncoderStream<'a, S> {
 }
 
 #[cfg(feature = "std")]
-impl<'a, S: Sink> Write for EncoderStream<'a, S> {
+impl<S: Sink> Write for EncoderStream<'_, S> {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
         match self.ctx.deflate(buf, &mut self.sink, false) {
             Ok(_) => Ok(buf.len()),
@@ -1347,7 +1347,7 @@ impl<'a> BufSink<'a> {
     }
 }
 
-impl<'a> Sink for BufSink<'a> {
+impl Sink for BufSink<'_> {
     #[inline(always)]
     fn put_bits(&mut self, bits: u32, len: u32) -> Result<(), Error> {
         self.bit_buffer |= bits << self.bits_in;
@@ -1428,7 +1428,7 @@ impl<'a> VecSink<'a> {
     }
 }
 
-impl<'a> Sink for VecSink<'a> {
+impl Sink for VecSink<'_> {
     #[inline(always)]
     fn put_bits(&mut self, bits: u32, len: u32) -> Result<(), Error> {
         self.bit_buffer |= bits << self.bits_in;

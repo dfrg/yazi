@@ -98,7 +98,7 @@ pub struct DecoderStream<'a, S: Sink> {
     finished: bool,
 }
 
-impl<'a, S: Sink> DecoderStream<'a, S> {
+impl<S: Sink> DecoderStream<'_, S> {
     /// Writes the specified buffer to the stream, producing decompressed data
     /// in the output.
     pub fn write(&mut self, buf: &[u8]) -> Result<(), Error> {
@@ -127,7 +127,7 @@ impl<'a, S: Sink> DecoderStream<'a, S> {
     }
 }
 
-impl<'a, S: Sink> Drop for DecoderStream<'a, S> {
+impl<S: Sink> Drop for DecoderStream<'_, S> {
     fn drop(&mut self) {
         if !self.finished {
             let _ = self.ctx.inflate(&[], &mut self.sink, true);
@@ -137,7 +137,7 @@ impl<'a, S: Sink> Drop for DecoderStream<'a, S> {
 }
 
 #[cfg(feature = "std")]
-impl<'a, S: Sink> Write for DecoderStream<'a, S> {
+impl<S: Sink> Write for DecoderStream<'_, S> {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
         match self.ctx.inflate(buf, &mut self.sink, false) {
             Ok(_) => Ok(buf.len()),
@@ -1056,13 +1056,13 @@ impl<'a> VecSink<'a> {
     }
 }
 
-impl<'a> Drop for VecSink<'a> {
+impl Drop for VecSink<'_> {
     fn drop(&mut self) {
         self.buffer.truncate(self.pos);
     }
 }
 
-impl<'a> Sink for VecSink<'a> {
+impl Sink for VecSink<'_> {
     fn written(&self) -> u64 {
         (self.pos - self.start_pos) as u64
     }
@@ -1100,7 +1100,7 @@ struct BufSink<'a> {
     pos: usize,
 }
 
-impl<'a> Sink for BufSink<'a> {
+impl Sink for BufSink<'_> {
     fn written(&self) -> u64 {
         self.pos as u64
     }
