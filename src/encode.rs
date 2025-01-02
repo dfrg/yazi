@@ -1119,7 +1119,7 @@ impl CodeBuffer {
                     bits.flush(sink)?;
                 }
                 let match_len = self.buffer[i] as usize;
-                let match_dist = self.buffer[i + 1] as usize | (self.buffer[i + 2] as usize) << 8;
+                let match_dist = self.buffer[i + 1] as usize | ((self.buffer[i + 2] as usize) << 8);
                 i += 3;
                 let i0 = LEN_SYM[match_len & 0xFF] as usize;
                 bits.put(lt.codes[i0] as u32, lt.code_sizes[i0] as u32);
