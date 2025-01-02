@@ -223,11 +223,11 @@
 //!
 //! # Implementation Notes
 //!
-//! The compressor is based heavily on both miniz (<https://github.com/richgel999/miniz>)
-//! by Rich Geldreich and miniz_oxide (<https://github.com/Frommi/miniz_oxide>)
+//! The compressor is based heavily on both [miniz](https://github.com/richgel999/miniz)
+//! by Rich Geldreich and [miniz_oxide](https://github.com/Frommi/miniz_oxide)
 //! by Frommi. The available compression levels and strategies are the same and
 //! it should produce an identical bitstream for a given set of options. The
-//! decompressor is based on the techniques in libdeflate (<https://github.com/ebiggers/libdeflate>)
+//! decompressor is based on the techniques in [libdeflate](https://github.com/ebiggers/libdeflate)
 //! by Eric Biggers.
 
 #![cfg_attr(not(feature = "std"), no_std)]
