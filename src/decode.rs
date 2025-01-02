@@ -352,8 +352,8 @@ fn inflate<S: Sink>(
                                 source.avail -= 1;
                             }
                         }
-                        let length = parts[0] | parts[1] << 8;
-                        let inv_length = parts[2] | parts[3] << 8;
+                        let length = parts[0] | (parts[1] << 8);
+                        let inv_length = parts[2] | (parts[3] << 8);
                         if length != (!inv_length & 0xFFFF) {
                             return Err(Error::InvalidBitstream);
                         }
@@ -840,7 +840,7 @@ fn read_zlib_checksum(source: &mut Source, bits: &mut Bits) -> Result<u32, Error
     for part in &mut parts {
         *part = bits.try_pop_source(source, 8)?;
     }
-    Ok(parts[0] << 24 | parts[1] << 16 | parts[2] << 8 | parts[3])
+    Ok((parts[0] << 24) | (parts[1] << 16) | (parts[2] << 8) | parts[3])
 }
 
 struct Trees {
