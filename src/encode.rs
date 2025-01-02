@@ -62,8 +62,10 @@ pub struct Encoder(DeflateContext);
 impl Encoder {
     /// Creates a new deflate encoder. Note that creating an encoder with this
     /// method allocates a large (200-300k) chunk of data on the stack and is
-    /// likely to cause an overflow if not carefully managed. See the boxed()
+    /// likely to cause an overflow if not carefully managed. See the [`boxed()`]
     /// constructor for a safer method that allocates on the heap.
+    ///
+    /// [`boxed()`]: Self::boxed
     pub fn new() -> Self {
         let flags = make_flags(
             false,
