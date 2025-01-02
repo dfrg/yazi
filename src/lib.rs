@@ -22,8 +22,7 @@
 //! yazi = "0.1.4"
 //! ```
 //!
-//! The [`compress`](fn.compress.html) and [`decompress`](fn.decompress.html) functions
-//! are provided for the most common use cases:
+//! The [`compress`] and [`decompress`] functions are provided for the most common use cases:
 //! ```
 //! use yazi::*;
 //! // Your source data.
@@ -42,23 +41,19 @@
 //!
 //! # Compression
 //!
-//! To compress data, you'll need to create an instance of the
-//! [`Encoder`](struct.Encoder.html) struct. The [`new`](struct.Encoder.html#method.new)
-//! method can
-//! be used to construct an encoder on the stack, but the internal buffers are large
-//! (~300k) and may cause a stack overflow so it is advisable to use the
-//! [`boxed`](struct.Encoder.html#method.boxed) method to allocate the encoder on the heap.
+//! To compress data, you'll need to create an instance of the [`Encoder`] struct.
+//! The [`new`](Encoder::new) method can be used to construct an encoder on the
+//! stack, but the internal buffers are large (~300k) and may cause a stack overflow
+//! so it is advisable to use the [`boxed`](Encoder::boxed) method to allocate
+//! the encoder on the heap.
 //!
 //! Newly constructed encoders are configured to output a raw DEFLATE bitstream using a
-//! medium compression level and a default strategy. Call
-//! [`set_format`](struct.Encoder.html#method.set_format) to change the output
-//! [`Format`](enum.Format.html). Raw DEFLATE and zlib are supported. The
-//! [`set_level`](struct.Encoder.html#method.set_level) method allows you to choose the
-//! preferred [`CompressionLevel`](enum.CompressionLevel.html) from a set of basic
-//! options or a specific level between 1 and 10. The
-//! [`CompressionStrategy`](enum.CompressionStrategy.html) can be changed with the
-//! [`set_strategy`](struct.Encoder.html#method.set_strategy) method. This allows you
-//! to, for example, force the encoder to output only static blocks.
+//! medium compression level and a default strategy. Call [`set_format`](Encoder::set_format)
+//! to change the output [`Format`]. Raw DEFLATE and zlib are supported. The
+//! [`set_level`](Encoder::set_level) method allows you to choose the preferred
+//! [`CompressionLevel`] from a set of basic options or a specific level between 1 and 10.
+//! The [`CompressionStrategy`] can be changed with the [`set_strategy`](Encoder::set_strategy)
+//! method. This allows you to, for example, force the encoder to output only static blocks.
 //!
 //! To create an encoder that outputs a zlib bitstream and spends some extra time to potentially
 //! produce a result with a higher compression ratio:
@@ -70,27 +65,25 @@
 //! ```
 //!
 //! The encoder itself does not provide any functionality. It simply stores state and
-//! configuration. To actually compress data, you'll need an
-//! [`EncoderStream`](struct.EncoderStream.html). A stream is a binding between an
-//! encoder and some specific output that will receive the compressed data. This
-//! design allows an encoder to be reused with different types of outputs without paying the
-//! allocation and initialization cost each time.
+//! configuration. To actually compress data, you'll need an [`EncoderStream`]. A stream
+//! is a binding between an encoder and some specific output that will receive the
+//! compressed data. This design allows an encoder to be reused with different types
+//! of outputs without paying the allocation and initialization cost each time.
 //!
 //! Streaming supports outputs of the following forms:
-//! - Fixed buffers, created with the [`stream_into_buf`](struct.Encoder.html#method.stream_into_buf) method.
-//! - Vectors, created with the [`stream_into_vec`](struct.Encoder.html#method.stream_into_vec) method.
-//! - Any type that implements [`std::io::Write`](https://doc.rust-lang.org/std/io/trait.Write.html),
-//!     created with the generic [`stream`](struct.Encoder.html#method.stream) method.
+//! - Fixed buffers, created with the [`stream_into_buf`](Encoder::stream_into_buf) method.
+//! - Vectors, created with the [`stream_into_vec`](Encoder::stream_into_vec) method.
+//! - Any type that implements [`std::io::Write`], created with the generic
+//!   [`stream`](Encoder::stream) method.
 //!
-//! Once you have an [`EncoderStream`](struct.EncoderStream.html), simply call
-//! [`write`](struct.EncoderStream.html#method.write) one or more times, feeding your raw
-//! data into the stream. If available, you can submit the entire input buffer at once, or
-//! in arbitrarily sized chunks down to a single byte. After all data has been written,
-//! call [`finish`](struct.EncoderStream.html#method.finish) on the stream which will
-//! consume it, flush all remaining input and output, and finalize the operation. The finish
-//! method returns a [`Result`](https://doc.rust-lang.org/std/result/enum.Result.html)
-//! containing the total number of compressed bytes written to the output on success, or an
-//! [`Error`](enum.Error.html) describing the problem on failure.
+//! Once you have an [`EncoderStream`], simply call [`write`](EncoderStream::write) one
+//! or more times, feeding your raw data into the stream. If available, you can submit
+//! the entire input buffer at once, or in arbitrarily sized chunks down to a single
+//! byte. After all data has been written, call [`finish`](EncoderStream::finish) on
+//! the stream which will consume it, flush all remaining input and output, and
+//! finalize the operation. The finish method returns a [`Result`] containing the
+//! total number of compressed bytes written to the output on success, or an
+//! [`Error`] describing the problem on failure.
 //!
 //! Let's write a function that compresses some arbitrary bytes into a vector:
 //! ```
@@ -122,31 +115,26 @@
 //! }
 //! ```
 //!
-//! Here, we can see that [`EncoderStream`](struct.EncoderStream.html) also implements
-//! [`Write`](https://doc.rust-lang.org/std/io/trait.Write.html), so we can
-//! pass it directly to [`std::io::copy`](https://doc.rust-lang.org/std/io/fn.copy.html).
-//! This allows streams to be composable with the standard I/O facilities and other
-//! libraries that support those interfaces.
+//! Here, we can see that [`EncoderStream`] also implements [`std::io::Write`], so we
+//! can pass it directly to [`std::io::copy`]. This allows streams to be composable
+//! with the standard I/O facilities and other libraries that support those interfaces.
 //!
 //! # Decompression
 //!
 //! If you've already read the section on compression, the API for decompression
-//! is essentially identical with the types replaced by [`Decoder`](struct.Decoder.html)
-//! and [`DecoderStream`](struct.DecoderStream.html). The documentation is copied here
-//! almost verbatim for the sake of completeness and for those who might have skipped
-//! directly to this section.
+//! is essentially identical with the types replaced by [`Decoder`] and [`DecoderStream`].
+//! The documentation is copied here almost verbatim for the sake of completeness and for
+//! those who might have skipped directly to this section.
 //!
-//! To decompress data, you'll need to create an instance of the
-//! [`Decoder`](struct.Decoder.html) struct. The [`new`](struct.Decoder.html#method.new)
-//! method can be used to construct a decoder on the stack, and unlike encoders, the
-//! decoder struct is relatively small (~10k) and generally safe to stack allocate. You can
-//! create a decoder on the heap with the [`boxed`](struct.Decoder.html#method.boxed)
-//! method if you prefer.
+//! To decompress data, you'll need to create an instance of the [`Decoder`] struct.
+//! The [`new`](Decoder::new) method can be used to construct a decoder on the stack,
+//! and unlike encoders, the decoder struct is relatively small (~10k) and generally
+//! safe to stack allocate. You can create a decoder on the heap with the
+//! [`boxed`](Decoder::boxed) method if you prefer.
 //!
 //! Newly constructed decoders are configured to decompress a raw DEFLATE bitstream. Call
-//! [`set_format`](struct.Decoder.html#method.set_format) to change the input
-//! [`Format`](enum.Format.html). Raw DEFLATE and zlib are supported. No other configuration
-//! is necessary for decompression.
+//! [`set_format`](Decoder::set_format) to change the input [`Format`]. Raw DEFLATE and
+//! zlib are supported. No other configuration is necessary for decompression.
 //!
 //! To create a decoder that decompresses a zlib bitstream:
 //! ```
@@ -157,27 +145,25 @@
 //!
 //! The decoder itself does not provide any functionality. It simply stores state and
 //! configuration. To actually decompress data, you'll need a
-//! [`DecoderStream`](struct.DecoderStream.html). A stream is a binding between a
+//! [`DecoderStream`]. A stream is a binding between a
 //! decoder and some specific output that will receive the decompressed data. This
 //! design allows a decoder to be reused with different types of outputs without paying the
 //! allocation and initialization cost each time.
 //!
 //! Streaming supports outputs of the following forms:
-//! - Fixed buffers, created with the [`stream_into_buf`](struct.Decoder.html#method.stream_into_buf) method.
-//! - Vectors, created with the [`stream_into_vec`](struct.Decoder.html#method.stream_into_vec) method.
-//! - Any type that implements [`std::io::Write`](https://doc.rust-lang.org/std/io/trait.Write.html),
-//!     created with the generic [`stream`](struct.Decoder.html#method.stream) method.
+//! - Fixed buffers, created with the [`stream_into_buf`](Decoder::stream_into_buf) method.
+//! - Vectors, created with the [`stream_into_vec`](Decoder::stream_into_vec) method.
+//! - Any type that implements [`std::io::Write`], created with the generic
+//!   [`stream`](Decoder::stream) method.
 //!
-//! Once you have a [`DecoderStream`](struct.DecoderStream.html), simply call
-//! [`write`](struct.DecoderStream.html#method.write) one or more times, feeding your compressed
-//! data into the stream. If available, you can submit the entire input buffer at once, or
-//! in arbitrarily sized chunks down to a single byte. After all data has been written,
-//! call [`finish`](struct.DecoderStream.html#method.finish) on the stream which will
-//! consume it, flush all remaining input and output, and finalize the operation. The finish
-//! method returns a [`Result`](https://doc.rust-lang.org/std/result/enum.Result.html)
-//! containing the total number of decompressed bytes written to the output along with an optional
-//! Adler-32 checksum (if the stream was zlib-encoded) on success, or an
-//! [`Error`](enum.Error.html) describing the problem on failure.
+//! Once you have a [`DecoderStream`], simply call [`write`](DecoderStream::write) one or
+//! more times, feeding your compressed data into the stream. If available, you can submit
+//! the entire input buffer at once, or in arbitrarily sized chunks down to a single byte.
+//! After all data has been written, call [`finish`](DecoderStream::finish) on the stream
+//! which will consume it, flush all remaining input and output, and finalize the operation.
+//! The finish method returns a [`Result`] containing the total number of decompressed bytes
+//! written to the output along with an optional Adler-32 checksum (if the stream was
+//! zlib-encoded) on success, or an [`Error`] describing the problem on failure.
 //!
 //! Let's write a function that decompresses a zlib bitstream into a vector and verifies
 //! the checksum:
@@ -215,11 +201,9 @@
 //! }
 //! ```
 //!
-//! Here, we can see that [`DecoderStream`](struct.DecoderStream.html) also implements
-//! [`Write`](https://doc.rust-lang.org/std/io/trait.Write.html), so we can
-//! pass it directly to [`std::io::copy`](https://doc.rust-lang.org/std/io/fn.copy.html).
-//! This allows streams to be composable with the standard I/O facilities and other
-//! libraries that support those interfaces.
+//! Here, we can see that [`DecoderStream`] also implements [`std::io::Write`], so we can
+//! pass it directly to [`std::io::copy`]. This allows streams to be composable with the
+//! standard I/O facilities and other libraries that support those interfaces.
 //!
 //! # Implementation Notes
 //!
