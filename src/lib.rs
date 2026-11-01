@@ -529,7 +529,7 @@ mod tests {
         }
 
         fn bit(&mut self, b: u32) {
-            if self.len % 8 == 0 {
+            if self.len & 7 == 0 {
                 self.bytes.push(0);
             }
             *self.bytes.last_mut().unwrap() |= (b as u8) << (self.len % 8);
