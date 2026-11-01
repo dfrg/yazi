@@ -164,7 +164,7 @@ impl<S: Sink> Write for DecoderStream<'_, S> {
 pub fn decompress(buf: &[u8], format: Format) -> Result<(Vec<u8>, Option<u32>), Error> {
     let mut decoder = Decoder::new();
     decoder.set_format(format);
-    let mut vec = Vec::with_capacity(buf.len() * 2);
+    let mut vec = Vec::with_capacity(buf.len() * 4);
     let mut stream = decoder.stream_into_vec(&mut vec);
     stream.write(buf)?;
     let (_, checksum) = stream.finish()?;
@@ -296,6 +296,117 @@ enum State {
     Match(u32),
 }
 
+/// Output a sink must have room for, past where it is, to decode in the
+/// fast loop: the longest match, and the slack its copy writes past it.
+const FAST_ROOM: usize = 258 + MATCH_SLACK;
+
+/// Why the fast loop stopped.
+enum Fast {
+    /// At the end of the block.
+    End,
+    /// The output has no more room.
+    Output,
+    /// Fewer than eight bytes of input are left.
+    Input,
+}
+
+/// Decodes a block's symbols with no checks for as long as there are eight
+/// bytes of input (so a refill always fills at least 56 bits, which hold a
+/// whole match: a length code and its extra bits, then a distance code and
+/// its) and room for a match in `out` past `pos`. `start` is where the
+/// output begins: a match reaching before it is refused.
+#[inline(always)]
+fn inflate_fast(
+    source: &mut Source,
+    bits: &mut Bits,
+    trees: &Trees,
+    out: &mut [u8],
+    start: usize,
+    pos: &mut usize,
+) -> Result<Fast, Error> {
+    // In locals for the loop, so they stay in registers; written back once.
+    let input = source.buffer;
+    let mut at = source.pos;
+    let mut buffer = bits.bit_buffer;
+    let mut bits_in = bits.bits_in;
+    let mut p = *pos;
+    let lt = &trees.lt.table;
+    let dt = &trees.dt.table;
+    let fast = loop {
+        if at + 8 > input.len() {
+            break Fast::Input;
+        }
+        if p + FAST_ROOM > out.len() {
+            break Fast::Output;
+        }
+        // At least 56 bits: see `Bits::fill`.
+        let word = u64::from_le_bytes(input[at..at + 8].try_into().unwrap());
+        buffer |= word << bits_in;
+        at += (63 - bits_in as usize) >> 3;
+        bits_in |= 56;
+        let mut entry = lt[(buffer & ((1 << LITERAL_LENGTH_TABLE_BITS) - 1)) as usize];
+        if entry & ENTRY_SUBTABLE != 0 {
+            buffer >>= LITERAL_LENGTH_TABLE_BITS;
+            bits_in -= LITERAL_LENGTH_TABLE_BITS;
+            let sub = (entry >> ENTRY_SHIFT) & 0xFFFF;
+            entry = lt[(sub + (buffer as u32 & ((1 << (entry & ENTRY_LENGTH_MASK)) - 1))) as usize];
+        }
+        buffer >>= entry & ENTRY_LENGTH_MASK;
+        bits_in -= entry & ENTRY_LENGTH_MASK;
+        if entry & ENTRY_LITERAL != 0 {
+            out[p] = (entry >> ENTRY_SHIFT) as u8;
+            p += 1;
+            // At least 41 bits are left, and a literal in the main table
+            // takes 10 at most: one more is taken without going round.
+            let next = lt[(buffer & ((1 << LITERAL_LENGTH_TABLE_BITS) - 1)) as usize];
+            if next & (ENTRY_LITERAL | ENTRY_SUBTABLE) == ENTRY_LITERAL {
+                buffer >>= next & ENTRY_LENGTH_MASK;
+                bits_in -= next & ENTRY_LENGTH_MASK;
+                out[p] = (next >> ENTRY_SHIFT) as u8;
+                p += 1;
+            }
+            continue;
+        }
+        let entry = entry >> ENTRY_SHIFT;
+        let extra = entry & EXTRA_LENGTH_BITS_MASK;
+        let length = ((entry >> LENGTH_BASE_SHIFT) + (buffer as u32 & ((1 << extra) - 1))) as usize;
+        buffer >>= extra;
+        bits_in -= extra;
+        if length == 0 {
+            break Fast::End;
+        }
+        let mut entry = dt[(buffer & ((1 << DISTANCE_TABLE_BITS) - 1)) as usize];
+        if entry & ENTRY_SUBTABLE != 0 {
+            buffer >>= DISTANCE_TABLE_BITS;
+            bits_in -= DISTANCE_TABLE_BITS;
+            let sub = (entry >> ENTRY_SHIFT) & 0xFFFF;
+            entry = dt[(sub + (buffer as u32 & ((1 << (entry & ENTRY_LENGTH_MASK)) - 1))) as usize];
+        }
+        buffer >>= entry & ENTRY_LENGTH_MASK;
+        bits_in -= entry & ENTRY_LENGTH_MASK;
+        let entry = entry >> ENTRY_SHIFT;
+        let extra = entry >> EXTRA_DISTANCE_BITS_SHIFT;
+        let distance =
+            ((entry & DISTANCE_BASE_MASK) + (buffer as u32 & ((1 << extra) - 1))) as usize;
+        buffer >>= extra;
+        bits_in -= extra;
+        if distance > p - start {
+            source.pos = at;
+            source.avail = input.len() - at;
+            *bits = Bits::new(buffer, bits_in);
+            *pos = p;
+            return Err(Error::InvalidBitstream);
+        }
+        copy_match(out, p - distance, length, p);
+        p += length;
+    };
+    source.pos = at;
+    source.avail = input.len() - at;
+    *bits = Bits::new(buffer, bits_in);
+    *pos = p;
+    Ok(fast)
+}
+
 fn inflate<S: Sink>(
     zlib: bool,
     state: &mut State,
@@ -308,7 +419,7 @@ fn inflate<S: Sink>(
     checksum: &mut Option<u32>,
     is_last: bool,
 ) -> Result<(), Error> {
-    loop {
+    'states: loop {
         match *state {
             State::Header => {
                 if bits.bytes_available(source) < 2 {
@@ -408,6 +519,18 @@ fn inflate<S: Sink>(
                 continue;
             }
             State::Inflate => {
+                while let Some((out, start, mut pos)) = sink.window(FAST_ROOM) {
+                    let fast = inflate_fast(source, bits, trees, out, start, &mut pos);
+                    sink.set_position(pos);
+                    match fast? {
+                        Fast::End => {
+                            *state = State::Block;
+                            continue 'states;
+                        }
+                        Fast::Output => continue,
+                        Fast::Input => break,
+                    }
+                }
                 let mut lbits = *bits;
                 let mut entry = 0;
                 if !is_last {
@@ -948,6 +1071,22 @@ impl Bits {
 
     #[inline(always)]
     fn fill(&mut self, source: &mut Source) -> u32 {
+        if self.bits_in >= 56 {
+            return self.bits_in;
+        }
+        if source.avail >= 8 {
+            // One unaligned load: the whole bytes that fit are taken, and
+            // the bits of the next above them are what it will hold when
+            // it is taken in turn.
+            let at = source.pos;
+            let word = u64::from_le_bytes(source.buffer[at..at + 8].try_into().unwrap());
+            self.bit_buffer |= word << self.bits_in;
+            let taken = (63 - self.bits_in as usize) >> 3;
+            source.pos += taken;
+            source.avail -= taken;
+            self.bits_in |= 56;
+            return self.bits_in;
+        }
         let count = (64 - self.bits_in as usize) >> 3;
         let bytes = source.get(count);
         let len = bytes.len();
@@ -1019,10 +1158,55 @@ impl Bits {
     }
 }
 
+/// Bytes a match copy may write past its end, so that short copies are a
+/// few fixed-size moves.
+const MATCH_SLACK: usize = 16;
+
+/// Copies the `len` bytes at `pos` to `buf_end`, the copy overlapping its
+/// source where they are closer than `len`. `buf` must have
+/// [`MATCH_SLACK`] bytes past `buf_end + len`, which it may overwrite.
 #[inline(always)]
 fn copy_match(buf: &mut [u8], pos: usize, len: usize, buf_end: usize) {
     let dist = buf_end - pos;
-    if dist > len {
+    // Copies 16 bytes from `from` to `to`: two moves, not a call.
+    let chunk = |buf: &mut [u8], from: usize, to: usize| {
+        let bytes: [u8; MATCH_SLACK] = buf[from..from + MATCH_SLACK].try_into().unwrap();
+        buf[to..to + MATCH_SLACK].copy_from_slice(&bytes);
+    };
+    if dist >= MATCH_SLACK {
+        // Each chunk's source ends where its destination starts, or before.
+        let mut i = 0;
+        while i < len {
+            chunk(buf, pos + i, buf_end + i);
+            i += MATCH_SLACK;
+        }
+    } else if dist == 1 {
+        let byte = buf[pos];
+        buf[buf_end..buf_end + len].fill(byte);
+    } else {
+        // The output repeats every `dist` bytes. Its first `period` bytes
+        // (the least whole number of repeats of 16 bytes or more) go a
+        // byte at a time; the rest in chunks from a period back, which the
+        // copy has written already.
+        let period = dist * MATCH_SLACK.div_ceil(dist);
+        let head = period.min(len);
+        for i in 0..head {
+            buf[buf_end + i] = buf[pos + i];
+        }
+        let mut i = head;
+        while i < len {
+            chunk(buf, buf_end + i - period, buf_end + i);
+            i += MATCH_SLACK;
+        }
+    }
+}
+
+/// Copies a match where `buf` may have no room past its end.
+#[inline(always)]
+fn copy_match_exact(buf: &mut [u8], pos: usize, len: usize, buf_end: usize) {
+    if buf_end + len + MATCH_SLACK <= buf.len() {
+        copy_match(buf, pos, len, buf_end);
+    } else if buf_end - pos >= len {
         buf.copy_within(pos..pos + len, buf_end);
     } else {
         for i in 0..len {
@@ -1037,6 +1221,20 @@ pub trait Sink {
     fn push(&mut self, byte: u8) -> Result<(), Error>;
     fn write(&mut self, bytes: &[u8]) -> Result<(), Error>;
     fn apply_match(&mut self, dist: usize, len: usize) -> Result<(), Error>;
+
+    /// The sink's buffer, where the output starts in it, and where it is,
+    /// for the fast loop to write into directly: where there is room for
+    /// `room` bytes past it and [`MATCH_SLACK`] after them. None where there
+    /// is not, or the sink has no buffer.
+    fn window(&mut self, room: usize) -> Option<(&mut [u8], usize, usize)> {
+        let _ = room;
+        None
+    }
+
+    /// Where the output is, after the fast loop wrote into the window.
+    fn set_position(&mut self, pos: usize) {
+        let _ = pos;
+    }
 }
 
 struct VecSink<'a> {
@@ -1054,6 +1252,24 @@ impl<'a> VecSink<'a> {
             pos: start_pos,
         }
     }
+
+    /// Makes room for `len` more bytes, and the slack a match copy writes
+    /// past them. The vector is longer than what is written until the sink
+    /// drops, which truncates it.
+    #[inline(always)]
+    fn reserve(&mut self, len: usize) {
+        let needed = self.pos + len + MATCH_SLACK;
+        if needed > self.buffer.len() {
+            self.grow(needed);
+        }
+    }
+
+    /// Lengthens the vector a little past `needed`: what it zeroes is soon
+    /// written, while its capacity grows as a vector's does.
+    #[cold]
+    fn grow(&mut self, needed: usize) {
+        self.buffer.resize(needed + (1 << 16), 0);
+    }
 }
 
 impl Drop for VecSink<'_> {
@@ -1069,14 +1285,16 @@ impl Sink for VecSink<'_> {
 
     #[inline(always)]
     fn push(&mut self, byte: u8) -> Result<(), Error> {
-        self.buffer.push(byte);
+        self.reserve(1);
+        self.buffer[self.pos] = byte;
         self.pos += 1;
         Ok(())
     }
 
     fn write(&mut self, bytes: &[u8]) -> Result<(), Error> {
         let len = bytes.len();
-        self.buffer.extend_from_slice(bytes);
+        self.reserve(len);
+        self.buffer[self.pos..self.pos + len].copy_from_slice(bytes);
         self.pos += len;
         Ok(())
     }
@@ -1088,10 +1306,20 @@ impl Sink for VecSink<'_> {
             return Err(Error::InvalidBitstream);
         }
         let pos = self.pos - dist;
-        self.buffer.resize(self.pos + len, 0);
+        self.reserve(len);
         copy_match(self.buffer, pos, len, self.pos);
         self.pos += len;
         Ok(())
+    }
+
+    fn window(&mut self, room: usize) -> Option<(&mut [u8], usize, usize)> {
+        // Room for many matches, so the fast loop seldom stops for more.
+        self.reserve(room.max(1 << 15));
+        Some((self.buffer, self.start_pos, self.pos))
+    }
+
+    fn set_position(&mut self, pos: usize) {
+        self.pos = pos;
     }
 }
 
@@ -1136,9 +1364,20 @@ impl Sink for BufSink<'_> {
             return Err(Error::Overflow);
         }
         let pos = self.pos - dist;
-        copy_match(self.buffer, pos, len, self.pos);
+        copy_match_exact(self.buffer, pos, len, self.pos);
         self.pos += len;
         Ok(())
+    }
+
+    fn window(&mut self, room: usize) -> Option<(&mut [u8], usize, usize)> {
+        if self.pos + room + MATCH_SLACK > self.buffer.len() {
+            return None;
+        }
+        Some((self.buffer, 0, self.pos))
+    }
+
+    fn set_position(&mut self, pos: usize) {
+        self.pos = pos;
     }
 }
 
