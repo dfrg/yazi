@@ -437,4 +437,145 @@ mod tests {
         stream.finish().unwrap();
         assert_eq!(buf, decompressed);
     }
+
+    /// Repeats at every distance from 1 to 40, long enough that each is a
+    /// run of matches: runs, short patterns, and copies of whole chunks.
+    fn generate_repeats() -> Vec<u8> {
+        let mut buf = Vec::new();
+        let mut seed = 7u32;
+        for dist in 1..=40usize {
+            let pattern: Vec<u8> = (0..dist)
+                .map(|_| {
+                    seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
+                    (seed >> 24) as u8
+                })
+                .collect();
+            for i in 0..600 {
+                buf.push(pattern[i % dist]);
+            }
+        }
+        buf
+    }
+
+    fn compress_zlib(buf: &[u8]) -> Vec<u8> {
+        let mut compressed = Vec::new();
+        let mut encoder = Encoder::boxed();
+        encoder.set_format(Format::Zlib);
+        encoder.set_level(CompressionLevel::BestSize);
+        let mut stream = encoder.stream_into_vec(&mut compressed);
+        stream.write(buf).unwrap();
+        stream.finish().unwrap();
+        compressed
+    }
+
+    #[test]
+    fn decompress_matches_at_every_distance() {
+        let buf = generate_repeats();
+        let compressed = compress_zlib(&buf);
+        let (decompressed, _) = decompress(&compressed, Format::Zlib).unwrap();
+        assert_eq!(buf, decompressed);
+        let mut streamed = Vec::new();
+        let mut decoder = Decoder::new();
+        decoder.set_format(Format::Zlib);
+        let mut stream = decoder.stream_into_vec(&mut streamed);
+        for chunk in compressed.chunks(7) {
+            stream.write(chunk).unwrap();
+        }
+        stream.finish().unwrap();
+        assert_eq!(buf, streamed);
+    }
+
+    #[test]
+    fn decompress_into_a_buffer_of_its_size() {
+        let buf = generate_repeats();
+        let compressed = compress_zlib(&buf);
+        let mut out = vec![0u8; buf.len()];
+        let mut decoder = Decoder::new();
+        decoder.set_format(Format::Zlib);
+        let mut stream = decoder.stream_into_buf(&mut out);
+        stream.write(&compressed).unwrap();
+        let (len, _) = stream.finish().unwrap();
+        assert_eq!(len as usize, buf.len());
+        assert_eq!(buf, out);
+        let mut short = vec![0u8; buf.len() - 1];
+        let mut decoder = Decoder::new();
+        decoder.set_format(Format::Zlib);
+        let mut stream = decoder.stream_into_buf(&mut short);
+        let written = stream
+            .write(&compressed)
+            .and_then(|_| stream.finish().map(|_| ()));
+        assert!(matches!(written, Err(Error::Overflow)));
+    }
+
+    /// Writes bits as deflate packs them: values from the least significant
+    /// bit, Huffman codes from the most.
+    #[derive(Default)]
+    struct Bits {
+        bytes: Vec<u8>,
+        len: usize,
+    }
+
+    impl Bits {
+        fn value(&mut self, v: u32, n: usize) {
+            for i in 0..n {
+                self.bit((v >> i) & 1);
+            }
+        }
+
+        fn code(&mut self, v: u32, n: usize) {
+            for i in (0..n).rev() {
+                self.bit((v >> i) & 1);
+            }
+        }
+
+        fn bit(&mut self, b: u32) {
+            if self.len % 8 == 0 {
+                self.bytes.push(0);
+            }
+            *self.bytes.last_mut().unwrap() |= (b as u8) << (self.len % 8);
+            self.len += 1;
+        }
+    }
+
+    /// A fixed Huffman block of `literals` letters, then a match of 3 from
+    /// `distance` back (distance code 29: 24577 and 13 extra bits), then
+    /// the end of the block, and padding so the decoder has input to spare.
+    fn match_past_the_start(literals: usize, extra: u32) -> Vec<u8> {
+        let mut b = Bits::default();
+        b.value(1, 1);
+        b.value(1, 2);
+        for _ in 0..literals {
+            b.code(0x30 + b'a' as u32, 8);
+        }
+        b.code(1, 7);
+        b.code(29, 5);
+        b.value(extra, 13);
+        b.code(0, 7);
+        b.bytes.extend_from_slice(&[0; 16]);
+        b.bytes
+    }
+
+    #[test]
+    fn decompress_refuses_a_match_before_the_start() {
+        // Decoded by the careful loop (too little input for the fast one),
+        // and by the fast loop.
+        for literals in [0, 40] {
+            let stream = match_past_the_start(literals, 0);
+            assert!(
+                matches!(
+                    decompress(&stream, Format::Raw),
+                    Err(Error::InvalidBitstream)
+                ),
+                "{literals}"
+            );
+            let mut out = vec![0u8; 1 << 16];
+            let mut decoder = Decoder::new();
+            let mut sink = decoder.stream_into_buf(&mut out);
+            let written = sink.write(&stream).and_then(|_| sink.finish().map(|_| ()));
+            assert!(
+                matches!(written, Err(Error::InvalidBitstream)),
+                "{literals}"
+            );
+        }
+    }
 }
