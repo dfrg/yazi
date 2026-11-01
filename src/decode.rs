@@ -164,7 +164,7 @@ impl<S: Sink> Write for DecoderStream<'_, S> {
 pub fn decompress(buf: &[u8], format: Format) -> Result<(Vec<u8>, Option<u32>), Error> {
     let mut decoder = Decoder::new();
     decoder.set_format(format);
-    let mut vec = Vec::with_capacity(buf.len() * 2);
+    let mut vec = Vec::with_capacity(buf.len() * 4);
     let mut stream = decoder.stream_into_vec(&mut vec);
     stream.write(buf)?;
     let (_, checksum) = stream.finish()?;
@@ -356,6 +356,15 @@ fn inflate_fast(
         if entry & ENTRY_LITERAL != 0 {
             out[p] = (entry >> ENTRY_SHIFT) as u8;
             p += 1;
+            // At least 41 bits are left, and a literal in the main table
+            // takes 10 at most: one more is taken without going round.
+            let next = lt[(buffer & ((1 << LITERAL_LENGTH_TABLE_BITS) - 1)) as usize];
+            if next & (ENTRY_LITERAL | ENTRY_SUBTABLE) == ENTRY_LITERAL {
+                buffer >>= next & ENTRY_LENGTH_MASK;
+                bits_in -= next & ENTRY_LENGTH_MASK;
+                out[p] = (next >> ENTRY_SHIFT) as u8;
+                p += 1;
+            }
             continue;
         }
         let entry = entry >> ENTRY_SHIFT;
@@ -1255,10 +1264,11 @@ impl<'a> VecSink<'a> {
         }
     }
 
+    /// Lengthens the vector a little past `needed`: what it zeroes is soon
+    /// written, while its capacity grows as a vector's does.
     #[cold]
     fn grow(&mut self, needed: usize) {
-        let len = needed.max(self.buffer.len() * 2).max(4096);
-        self.buffer.resize(len, 0);
+        self.buffer.resize(needed + (1 << 16), 0);
     }
 }
 
